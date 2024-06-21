@@ -1,0 +1,79 @@
+{
+  "editor.lineNumbers": "relative",
+  "window.commandCenter": 1,
+  "editor.fontFamily": "Consolas, 'JetBrains Mono', monospace",
+  "workbench.colorTheme": "Default High Contrast Light",
+  "editor.inlineSuggest.enabled": true,
+  "terminal.integrated.env.osx": {
+    "FIG_NEW_SESSION": "1"
+  },
+  "files.exclude": {
+    "**/.trunk/*out/": true,
+    "**/.trunk/*actions/": true,
+    "**/.trunk/*logs/": true,
+    "**/.trunk/*plugins/": true,
+    "**/.trunk/*notifications/": true
+  },
+  "files.watcherExclude": {
+    "**/.trunk/*out/": true,
+    "**/.trunk/*actions/": true,
+    "**/.trunk/*logs/": true,
+    "**/.trunk/*plugins/": true,
+    "**/.trunk/*notifications/": true
+  },
+  "editor.defaultFormatter": "trunk.io",
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
+  "editor.formatOnSave": true,
+  "jest.autoRun": "off",
+  "editor.inlayHints.enabled": "offUnlessPressed",
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "explicit",
+    "source.organizeImports": "explicit"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "terminal.integrated.scrollback": 100000,
+  "typescript.updateImportsOnFileMove.enabled": "always",
+  "git.autofetch": true,
+  "editor.unicodeHighlight.ambiguousCharacters": false,
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "extensions.experimental.affinity": {
+    "asvetliakov.vscode-neovim": 1
+  },
+  "editor.accessibilitySupport": "off",
+  "[prisma]": {
+    "editor.defaultFormatter": "Prisma.prisma"
+  },
+  "tailwindCSS.experimental.classRegex": [],
+  "vscode-neovim.neovimExecutablePaths.darwin": "/opt/homebrew/opt/nvim/bin/nvim",
+  "window.zoomLevel": 3,
+  "editor.stickyScroll.enabled": true,
+  "terminal.integrated.stickyScroll.enabled": true,
+  "workbench.tree.enableStickyScroll": true,
+  "cursor.cpp.disabledLanguages": ["scminput"],
+  "python.terminal.activateEnvironment": false,
+  "[go]": {
+    "editor.defaultFormatter": "golang.go"
+  },
+  "[swift]": {
+    "editor.defaultFormatter": "vknabel.vscode-apple-swift-format"
+  }
+}
+
