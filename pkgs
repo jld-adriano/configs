@@ -5,3 +5,7 @@ neovim
 fzf
 raycast extensions:(arc)
 setapp with:(cleanshotx,cleanmymac,dropzone,proxyman,paste,tableplus,bartender)
+ohmyzsh plugins:(git kubectl aws terraform)
+atuin
+cursor
+starship
