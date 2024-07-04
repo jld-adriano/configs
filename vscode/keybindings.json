@@ -456,5 +456,20 @@
     "key": "shift+alt+f12",
     "command": "-references-view.findReferences",
     "when": "editorHasReferenceProvider"
+  },
+  {
+    "key": "cmd+g p",
+    "command": "runCommands",
+    "args": {
+      "commands": [
+        "workbench.action.terminal.new",
+        {
+          "command": "workbench.action.terminal.sendSequence",
+          "args": {
+            "text": "gprpsp && echo 'Command succeeded. Closing in 2 seconds...' && sleep 2 && exit || (echo 'Command failed. Press any key to close this terminal.' && read -n 1 -s)\u000D"
+          }
+        }
+      ]
+    }
   }
 ]
