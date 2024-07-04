@@ -11,3 +11,4 @@ brew install jq qq curl neovim fzf starship
 # Install casks
 brew install --cask cursor raycast
 
+xargs -n 1 cursor --install-extension < vscode/extensions.list
