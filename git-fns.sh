@@ -4,20 +4,21 @@ alias gcane="git commit --amend --no-edit"
 alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit"
 
 # Interactive add new files
-gap() {
+unalias gap 2>/dev/null
+function gap(){
   git_root=$(git rev-parse --show-toplevel)
   git status --porcelain | grep '^??' | cut -c4- | xargs -I{} git add -N ${git_root}/{}
   git add -p $@
 }
 
 # Pretty status
-gs() { 
+function gs(){ 
   git -c color.ui=always status $@ | less -R
 }
 
 # Interactive fixup commit 
 unalias gcf 2>/dev/null
-gcf() {
+function gcf(){
   if [[ -z $1 ]]; then
     # List last 30 commits
     LAST_COMMITS=$(git log --pretty=format:"%h %s" -100 | grep -v "fixup")
@@ -40,12 +41,12 @@ gcf() {
 }
 
 # Commit with neovim
-gcv() {
+function gcv() {
     EDITOR=neovim git commit -v
 }
 
 # Pull rebase with squash
-gprps() {
+function gprps() {
   # Refuse if in the middle of a rebase
   git status | grep -q 'rebase in progress';
   if [[ $? -eq 0 ]]; then
@@ -55,12 +56,12 @@ gprps() {
   git reset && git pull --rebase --autostash && gass
 }
 
-gprpsp() {
+function gprpsp() {
   gprps && git push
 
 }
 
 # Rebase with autosquash and rebase
-gass() {
+function gass() {
   GIT_SEQUENCE_EDITOR=true git rebase --autosquash -i --autostash
 }
