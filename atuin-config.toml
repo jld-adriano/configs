@@ -1,0 +1,8 @@
+
+search_mode = "fuzzy"
+filter_mode = "directory"
+enter_accept = false
+prefers_reduced_motion = true
+
+[sync]
+records = true
