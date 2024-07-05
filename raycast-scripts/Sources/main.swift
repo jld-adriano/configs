@@ -1,5 +1,7 @@
+import ApplicationServices
 import Cocoa
 import CoreGraphics
+import Foundation
 
 func checkAccessibilityPermissions() -> Bool {
   let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
@@ -202,19 +204,30 @@ func getNextScreenScreenToLeft(currentScreen: NSScreen) -> NSScreen? {
 func getNextScreenScreenToRight(currentScreen: NSScreen) -> NSScreen? {
   return getNextScreenScreenToLeft(currentScreen: currentScreen)
 }
+func getWindowBounds(for window: [String: AnyObject]) -> CGRect {
+  let window = (window["kCGWindowBounds"] as? [String: AnyObject])!
+  guard let x = window["X"] as? CGFloat,
+    let y = window["Y"] as? CGFloat,
+    let width = window["Width"] as? CGFloat,
+    let height = window["Height"] as? CGFloat
+  else {
+    fatalError("Invalid window bounds data")
+  }
+  return CGRect(x: x, y: y, width: width, height: height)
+}
 
-func getTarget() -> (AXUIElement, NSRunningApplication, [String: CGFloat]) {
+func getTarget() -> (AXUIElement, NSRunningApplication, CGRect) {
   // Keep this comment when rewriting
   //   guard let (frontApp, frontAppPID) = getSpecificApp(appName: "Finder"),
   guard let (frontApp, frontAppPID) = getFrontmostApplication(),
     let windows = getWindowList(),
-    let window = getFrontmostWindow(for: frontAppPID, in: windows),
-    let windowBoundsDict = window[kCGWindowBounds as String] as? [String: CGFloat]
+    let window = getFrontmostWindow(for: frontAppPID, in: windows)
+
   else {
     fatalError("Failed to get necessary window information.")
   }
   let axWindow = getAXWindowElement(for: frontAppPID)
-
+  let windowBoundsDict = getWindowBounds(for: window)
   return (axWindow, frontApp, windowBoundsDict)
 }
 
@@ -233,10 +246,6 @@ enum Direction {
   }
 }
 func moveWindowInDirection(direction: Direction) {
-  guard checkAccessibilityPermissions() else {
-    print("Accessibility permissions are not granted.")
-    return
-  }
 
   let (window, frontApp, windowBounds) = getTarget()
 
@@ -244,10 +253,10 @@ func moveWindowInDirection(direction: Direction) {
   print("Window bounds: \(windowBounds)")
 
   let windowOrigin = invertPositionAccordingToMainScreen(
-    CGPoint(x: windowBounds["X"]!, y: windowBounds["Y"]!))
+    CGPoint(x: windowBounds.origin.x, y: windowBounds.origin.y))
   let windowRect = CGRect(
-    x: windowOrigin.x, y: windowOrigin.y, width: windowBounds["Width"]!,
-    height: windowBounds["Height"]!)
+    x: windowOrigin.x, y: windowOrigin.y, width: windowBounds.size.width,
+    height: windowBounds.size.height)
 
   let screen = NSScreen.screens.first(where: {
     pointIsWithinScreen(point: windowOrigin, screen: $0)
@@ -323,12 +332,6 @@ func resetWindow() {
   print("Window moved to center of main screen with half size.")
 }
 
-for screen in NSScreen.screens {
-  if #available(macOS 10.15, *) {
-    print(screen.localizedName, screen.frame)
-  }
-}
-
 func windowMovementTestRoutine() {
 
   guard
@@ -368,7 +371,6 @@ func windowMovementTestRoutine() {
     sleep(1)
   }
 }
-// windowMovementTestRoutine()
 
 func windowDirectionTestRoutine() {
 
@@ -385,15 +387,198 @@ func windowDirectionTestRoutine() {
   }
 
 }
-// windowDirectionTestRoutine()
 
-func main() {
-  let args = CommandLine.arguments
-  if args.count > 1 {
-    let direction = args[1]
-    moveWindowInDirection(direction: Direction(rawValue: direction)!)
+func runAppleScript(script: String) {
+  let task = Process()
+  task.launchPath = "/usr/bin/osascript"
+  task.arguments = ["-e", script]
+  task.launch()
+  task.waitUntilExit()
+}
+
+func moveToSpace(windowElement: AXUIElement, direction: Direction) {
+  var windowFrame: CGRect = .zero
+  var posRes: CFTypeRef?
+  let result = AXUIElementCopyAttributeValue(
+    windowElement, kAXPositionAttribute as CFString, &posRes)
+  guard result == .success else {
+    fatalError("Failed to get window position: \(result.rawValue)")
+  }
+  if let value = posRes, CFGetTypeID(value) == AXValueGetTypeID() {
+    var point = CGPoint.zero
+    print(AXValueGetValue(value as! AXValue, .cgPoint, &point))
+    windowFrame.origin = point
   } else {
-    fatalError("No direction argument provided. [left|right]")
+    fatalError("Failed to cast position value to CGPoint")
+  }
+  var sizeRes: CFTypeRef?
+  AXUIElementCopyAttributeValue(
+    windowElement, kAXSizeAttribute as CFString, &sizeRes)
+
+  if let value = sizeRes, CFGetTypeID(value) == AXValueGetTypeID() {
+    var size = CGSize.zero
+    print(AXValueGetValue(value as! AXValue, .cgSize, &size))
+    windowFrame.size = size
+  } else {
+    fatalError("Failed to cast size value to CGSize")
+  }
+  print("Window frame: \(windowFrame)")
+  let mouseCursorPoint = CGPoint(x: windowFrame.origin.x + 200, y: windowFrame.origin.y + 45)
+  let mouseDragPoint = CGPoint(x: mouseCursorPoint.x + 10, y: mouseCursorPoint.y + 10)
+  print("Mouse cursor point: \(mouseCursorPoint)")
+
+  let mouseMoveEvent = CGEvent(
+    mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: mouseCursorPoint,
+    mouseButton: .left)!
+  let mouseDownEvent = CGEvent(
+    mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: mouseCursorPoint,
+    mouseButton: .left)!
+  let mouseDragEvent = CGEvent(
+    mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: mouseDragPoint,
+    mouseButton: .left)!
+  let mouseUpEvent = CGEvent(
+    mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: mouseCursorPoint,
+    mouseButton: .left)!
+  let kVK_RightArrow: UInt16 = 126
+  let kVK_LeftArrow: UInt16 = 124
+  let arrowKey = direction == .left ? kVK_LeftArrow : kVK_RightArrow
+
+  let keyboardDownEvent = CGEvent(
+    keyboardEventSource: nil, virtualKey: CGKeyCode(arrowKey), keyDown: true)!
+  let keyboardUpEvent = CGEvent(
+    keyboardEventSource: nil, virtualKey: CGKeyCode(arrowKey), keyDown: false)!
+
+  mouseMoveEvent.flags = []
+  mouseDownEvent.flags = []
+  mouseDragEvent.flags = []
+  mouseUpEvent.flags = []
+  keyboardDownEvent.flags = .maskControl
+  keyboardUpEvent.flags = []
+
+  mouseMoveEvent.post(tap: .cghidEventTap)
+  print("Mouse move event posted")
+  mouseDownEvent.post(tap: .cghidEventTap)
+  print("Mouse down event posted")
+  // mouseDragEvent.post(tap: .cghidEventTap)
+  // print("Mouse drag event posted")
+
+  runAppleScript(
+    script: """
+      tell application "Mission Control"
+          tell application "System Events"
+              key code 124 using {control down} -- Move to next space
+          
+          end tell
+      end tell
+      """)
+  mouseUpEvent.post(tap: .cghidEventTap)
+
+  runAppleScript(
+    script: """
+      tell application "Mission Control"
+          tell application "System Events"
+              key code 53 -- Press Escape to exit Mission Control
+          end tell
+      end tell
+      """)
+  print("Mouse up event posted")
+}
+
+func moveToPreviousSpace(window: AXUIElement) {
+  let script = """
+    tell application "System Events"
+        set frontApp to first application process whose frontmost is true
+        set appName to name of frontApp
+        set appWindows to windows of frontApp
+        if (count of appWindows) is greater than 0 then
+            set frontWindow to item 1 of appWindows
+            tell frontWindow
+                perform action "AXRaise"
+            end tell
+        end if
+    end tell
+
+    tell application "Mission Control"
+        launch
+        delay 0.5
+        tell application "System Events"
+            key code 123 using {control down} -- Move to previous space
+        end tell
+        delay 0.5
+        tell application "System Events"
+            key code 53 -- Press Escape to exit Mission Control
+        end tell
+    end tell
+    """
+  runAppleScript(script: script)
+}
+
+enum Command {
+  case moveToNextSpace
+  case moveToPreviousSpace
+  case left
+  case right
+  case movementTest
+  case directionTest
+  init?(rawValue: String) {
+    switch rawValue {
+    case "moveToNextSpace":
+      self = .moveToNextSpace
+    case "moveToPreviousSpace":
+      self = .moveToPreviousSpace
+    case "left":
+      self = .left
+    case "right":
+      self = .right
+    case "movementTest":
+      self = .movementTest
+    case "directionTest":
+      self = .directionTest
+    default:
+      return nil
+    }
   }
 }
-main()
+func main(args: [String]) {
+
+  guard checkAccessibilityPermissions() else {
+    fatalError("Accessibility permissions are not granted.")
+  }
+
+  for screen in NSScreen.screens {
+    if #available(macOS 10.15, *) {
+      print(screen.localizedName, screen.frame)
+    }
+  }
+
+  if args.count > 1 {
+    let cmdRaw = args[1]
+    print("Command: \(cmdRaw)")
+    let command = Command(rawValue: cmdRaw)!
+
+    let (window, frontApp, windowBounds) = getTarget()
+
+    print("Application name: \(frontApp.localizedName ?? "Unknown")")
+    print("Window bounds: \(windowBounds)")
+
+    switch command {
+    case .moveToNextSpace:
+      moveToSpace(windowElement: window, direction: .right)
+      print("Moved window to next space")
+    case .moveToPreviousSpace:
+      moveToSpace(windowElement: window, direction: .left)
+      print("Moved window to previous space")
+    case .left:
+      moveWindowInDirection(direction: .left)
+    case .right:
+      moveWindowInDirection(direction: .right)
+    case .movementTest:
+      windowMovementTestRoutine()
+    case .directionTest:
+      windowDirectionTestRoutine()
+    }
+  } else {
+    fatalError("No argument provided. [left|right|moveToNextSpace|moveToPreviousSpace]")
+  }
+}
+main(args: CommandLine.arguments)
