@@ -24,5 +24,9 @@ function cproj() {
     if [ -z "$name" ]; then
         name="$(find ~/projs -mindepth 1 -maxdepth 1 -type d | fzf --prompt="Select project file to edit (Ctrl+C to exit): ")"
     fi
-    cursor ~/projs/$name
+    if [ -z "$name" ]; then
+        echo "No project file to edit."
+        return
+    fi
+    cursor $name
 }
