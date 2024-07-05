@@ -6,7 +6,7 @@ curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 curl -sS https://starship.rs/install.sh | sh
 
 # Install Homebrew packages
-brew install jq qq curl neovim fzf starship reflex
+brew install jq qq curl neovim fzf starship reflex github
 
 # Install casks
 brew install --cask cursor raycast
