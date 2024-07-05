@@ -74,6 +74,7 @@
   },
   "[swift]": {
     "editor.defaultFormatter": "vknabel.vscode-apple-swift-format"
-  }
+  },
+  "lldb.library": "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Versions/A/LLDB",
+  "lldb.launch.expressions": "native"
 }
-
