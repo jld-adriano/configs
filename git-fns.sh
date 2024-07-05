@@ -54,7 +54,7 @@ function gprps() {
     echo "You are in the middle of a rebase. Finish it before pushing"
     return 1
   fi
-  git reset && git pull --rebase --autostash && gass
+  git reset && sleep 0.3 && git pull --rebase --autostash && gass
 }
 
 function gprpsp() {
