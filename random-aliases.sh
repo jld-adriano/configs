@@ -16,3 +16,6 @@ function delete-untracked-interactive() {
         rm "$file"
     done
 }
+
+alias cr="cursor -r"
+alias c="cursor"
