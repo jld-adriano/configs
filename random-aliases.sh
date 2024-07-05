@@ -19,3 +19,10 @@ function delete-untracked-interactive() {
 
 alias cr="cursor -r"
 alias c="cursor"
+function cproj() {
+    name=$1
+    if [ -z "$name" ]; then
+        name="$(find ~/projs -mindepth 1 -maxdepth 1 -type d | fzf --prompt="Select project file to edit (Ctrl+C to exit): ")"
+    fi
+    cursor ~/projs/$name
+}
