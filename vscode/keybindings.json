@@ -467,10 +467,14 @@
         {
           "command": "workbench.action.terminal.sendSequence",
           "args": {
-            "text": "gprpsp && echo 'Command succeeded. Closing in 2 seconds...' && sleep 2 && exit || (echo 'Command failed. Press any key to close this terminal.' && read -n 1 -s)\u000D\u0004"
+            "text": "gprpsp && echo 'Command succeeded. Closing ...' && osascript -e 'tell application \"System Events\" to keystroke \"j\" using {command down}' && sleep 0.5 && exit || (echo 'Command failed. Press any key to close this terminal.' && read -n 1 -s)\u000D"
           }
         }
       ]
     }
+  },
+  {
+    "key": "cmd+g r",
+    "command": "git.unstageAll"
   }
 ]
