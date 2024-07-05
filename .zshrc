@@ -1,3 +1,4 @@
+export EDITOR="nvim"
 
 # Oh My Zsh config
 export ZSH="$HOME/.oh-my-zsh"
@@ -15,3 +16,4 @@ eval "$(starship init zsh)"
 # Custom configuration from repo
 # This might need to change in new installs
 source /Users/jldadriano/projs/configs/src.sh
+

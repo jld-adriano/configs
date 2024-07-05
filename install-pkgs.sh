@@ -1,11 +1,27 @@
 #!/usr/bin/env zsh
 
-sh <(curl -L https://nixos.org/nix/install)
+set -eo pipefail
 
+# Nix base setup
+sh <(curl -L https://nixos.org/nix/install)
+sudo rm -rf /etc/nix/nix.conf
+sudo ln -s $(pwd)/nix.conf /etc/nix/nix.conf
+
+nix-channel --add https://github.com/nix-community/home-manager/archive/master.tar.gz home-manager
+nix-channel --update
+
+nix-shell '<home-manager>' -A install
+
+rm -rf ~/.config/home-manager/home.nix
+ln -s $(pwd)/home.nix ~/.config/home-manager/home.nix
+
+
+# Home manager darwin
 mkdir -p ~/.config/nix
-cd ~/.config/nix
-nix --extra-experimental-features nix-command --extra-experimental-features flakes flake init -t nix-darwin
-sed -i '' "s/simple/$(scutil --get LocalHostName)/" flake.nix
+rm -rf ~/.config/nix/flake.nix
+(cd ~/.config/nix && nix flake init -t nix-darwin)
+rm -rf ~/.config/nix/flake.nix
+ln -s $(pwd)/flake.nix ~/.config/nix/flake.nix
 
 # Atuin
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh

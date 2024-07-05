@@ -2,7 +2,6 @@
 
 alias gcane="git commit --amend --no-edit"
 alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit"
-export EDITOR=neovim
 
 # Interactive add new files
 unalias gap 2>/dev/null
@@ -39,11 +38,6 @@ function gcf(){
     return 0
   fi
   git commit --fixup "${@}"
-}
-
-# Commit with neovim
-function gcv() {
-    EDITOR=neovim git commit -v
 }
 
 # Pull rebase with squash
