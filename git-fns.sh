@@ -23,7 +23,7 @@ function gcf(){
   if [[ -z $1 ]]; then
     # List last 30 commits
     LAST_COMMITS=$(git log --pretty=format:"%h %s" -100 | grep -v "fixup")
-    LAST_COMMITS_COUNT=$(echo "${LAST_COMMITS}" | wc -l)
+    LAST_COMMITS_COUNT=$(echo "${LAST_COMMITS}" | wc -l | tr -d ' ')
     # Select commit
     SELECTED_COMMIT=$(echo "${LAST_COMMITS}" | fzf --height ${LAST_COMMITS_COUNT} --reverse --border)
     # Get commit hash
