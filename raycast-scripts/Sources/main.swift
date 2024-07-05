@@ -83,8 +83,6 @@ func moveWindow(axWindow: AXUIElement, to originalPosition: CGPoint, size: CGSiz
   let sizeValue = AXValueCreate(.cgSize, &size)!
   let sizeResult = AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue)
 
-  let mainScreen = NSScreen.main!
-  let screenHeight = mainScreen.frame.height
   let screenContainingPosition = NSScreen.screens.first(where: {
     pointIsWithinScreen(point: position, screen: $0)
   })
@@ -205,7 +203,7 @@ func getNextScreenScreenToRight(currentScreen: NSScreen) -> NSScreen? {
   return getNextScreenScreenToLeft(currentScreen: currentScreen)
 }
 
-func getTarget() -> (AXUIElement, NSRunningApplication, pid_t, [String: CGFloat]) {
+func getTarget() -> (AXUIElement, NSRunningApplication, [String: CGFloat]) {
   // Keep this comment when rewriting
   //   guard let (frontApp, frontAppPID) = getSpecificApp(appName: "Finder"),
   guard let (frontApp, frontAppPID) = getFrontmostApplication(),
@@ -217,7 +215,7 @@ func getTarget() -> (AXUIElement, NSRunningApplication, pid_t, [String: CGFloat]
   }
   let axWindow = getAXWindowElement(for: frontAppPID)
 
-  return (axWindow, frontApp, frontAppPID, windowBoundsDict)
+  return (axWindow, frontApp, windowBoundsDict)
 }
 
 enum Direction {
@@ -240,7 +238,7 @@ func moveWindowInDirection(direction: Direction) {
     return
   }
 
-  let (window, frontApp, frontAppPID, windowBounds) = getTarget()
+  let (window, frontApp, windowBounds) = getTarget()
 
   print("Application name: \(frontApp.localizedName ?? "Unknown")")
   print("Window bounds: \(windowBounds)")
@@ -278,11 +276,10 @@ func moveWindowInDirection(direction: Direction) {
       print("Window moved to next screen.")
 
     } else {
-      let axWindow = getAXWindowElement(for: frontAppPID)
       let newPosition = CGPoint(x: screenFrame.minX, y: screenFrame.minY)
 
       print("Moving window to \(newPosition) with size \(newSize)")
-      moveWindow(axWindow: axWindow, to: newPosition, size: newSize)
+      moveWindow(axWindow: window, to: newPosition, size: newSize)
       print("Window moved to left half of the screen.")
     }
   case .right:
@@ -302,11 +299,10 @@ func moveWindowInDirection(direction: Direction) {
       print("Window moved to next screen.")
 
     } else {
-      let axWindow = getAXWindowElement(for: frontAppPID)
       let newPosition = CGPoint(x: screenFrame.maxX, y: screenFrame.minY)
 
       print("Moving window to \(newPosition) with size \(newSize)")
-      moveWindow(axWindow: axWindow, to: newPosition, size: newSize)
+      moveWindow(axWindow: window, to: newPosition, size: newSize)
       print("Window moved to right half of the screen.")
     }
 
@@ -315,7 +311,7 @@ func moveWindowInDirection(direction: Direction) {
 }
 /// Resets to center of main screen, size = half of the screen h/w
 func resetWindow() {
-  let (window, frontApp, frontAppPID, windowBounds) = getTarget()
+  let (window, _, _) = getTarget()
 
   let mainScreen = NSScreen.main!
   let screenRect = mainScreen.frame
@@ -323,8 +319,7 @@ func resetWindow() {
   let newPosition = CGPoint(
     x: screenRect.midX - newSize.width / 2, y: screenRect.midY + newSize.height / 2)
 
-  let axWindow = getAXWindowElement(for: frontAppPID)
-  moveWindow(axWindow: axWindow, to: newPosition, size: newSize)
+  moveWindow(axWindow: window, to: newPosition, size: newSize)
   print("Window moved to center of main screen with half size.")
 }
 
@@ -351,7 +346,7 @@ func windowMovementTestRoutine() {
 
   let mainScreen = NSScreen.main!
 
-  let (window, frontApp, frontAppPID, windowBounds) = getTarget()
+  let (window, _, _) = getTarget()
 
   print(
     "Debug: maxX: \(dellScreen.frame.maxX), minX: \(dellScreen.frame.minX) maxY: \(dellScreen.frame.maxY), minY: \(dellScreen.frame.minY)"
