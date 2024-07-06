@@ -18,7 +18,7 @@ const runHomeManagerSwitch = () => {
       { stdio: "inherit" }
     );
     sendNotification("Home Manager switch executed successfully.");
-    console.log("Home Manager switch executed successfully.");
+    console.log("====== Home Manager switch executed successfully ======");
   } catch (error) {
     sendNotification("Error executing Home Manager switch.");
     console.error("Error executing Home Manager switch:", error);
@@ -31,7 +31,7 @@ const throttledAndDebouncedRun = debounce(
 );
 
 async function main() {
-  console.log("Starting Home Manager Daemon...");
+  console.log("====== Starting Home Manager Daemon ======");
   console.log(notifier);
   sendNotification("Home Manager Daemon started");
   watch(homeManagerDir, { recursive: true }, (eventType, filename) => {
