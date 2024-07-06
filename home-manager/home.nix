@@ -149,6 +149,20 @@ let
         _cproj false $1
     }
   '';
+  generateProgramArguments = dir: cmd: [
+    "zsh"
+    "-c"
+    ''
+      export PATH=/nix/var/nix/profiles/default/bin:$PATH
+
+      source ${config.home.homeDirectory}/.zshenv
+      source ${config.home.homeDirectory}/.zprofile
+      source ${config.home.homeDirectory}/.zshrc
+      source ${config.home.homeDirectory}/.zlogin
+
+      cd ${dir} && /nix/var/nix/profiles/default/bin/nix-shell --command '${cmd}'
+    ''
+  ];
 in {
   home.username = "jldadriano";
   home.homeDirectory = "/Users/jldadriano";
@@ -205,9 +219,9 @@ in {
   launchd.agents.home-manager-daemon = {
     enable = true;
     config = {
-      ProgramArguments = [ "bun" "run" "--watch" "index.ts" ];
-      WorkingDirectory =
-        "${config.home.homeDirectory}/../nix-home-manager-daemon/";
+      ProgramArguments = generateProgramArguments
+        "${config.home.homeDirectory}/projs/configs/nix-home-manager-daemon/"
+        "bun run --watch index.ts";
       KeepAlive = true;
       RunAtLoad = true;
       StandardOutPath = "/tmp/home-manager-daemon.log";
