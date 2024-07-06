@@ -476,5 +476,9 @@
   {
     "key": "cmd+g r",
     "command": "git.unstageAll"
+  },
+  {
+    "key": "cmd+g d",
+    "command": "git.discard"
   }
 ]
