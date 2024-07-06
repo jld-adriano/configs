@@ -163,6 +163,10 @@ in {
     pkgs.btop
     pkgs.neovim
     pkgs.gh
+    pkgs.curl
+    pkgs.fzf
+    pkgs.reflex
+    pkgs.bun
   ];
 
   programs.zsh = {
