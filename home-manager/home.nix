@@ -145,6 +145,11 @@ in {
   };
 
   programs.starship.enable = true;
+  programs.git = {
+    enable = true;
+    userName = "Adriano";
+    userEmail = "jld.adriano@gmail.com";
+  };
 
   # home.file = {
   #   # ... existing file configurations ...
