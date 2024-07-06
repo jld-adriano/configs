@@ -62,6 +62,34 @@ let
     function gass() {
       GIT_SEQUENCE_EDITOR=true git rebase --autosquash -i --autostash
     }
+
+    function _get-github-token() {
+      temp_file=$(mktemp)
+      # Run gh auth login in the background and redirect output to a temp file
+      (gh auth login -w -p ssh -h Github.com --skip-ssh-key 2>&1 | tee "$temp_file") &
+      # Wait until the one-time code is found in the temp file
+      while ! grep -q "one-time code" "$temp_file"; do
+        echo "Waiting for one-time code..."
+        sleep 0.5
+      done
+      open "https://github.com/login/device"
+      echo "One-time code found, copying to clipboard..."
+      one_time_code=$(grep "one-time code" "$temp_file" | awk '{print $7}')
+      echo -n "$one_time_code" | pbcopy  # For macOS; use xclip or xsel for Linux
+      echo "One-time code $one_time_code copied to clipboard."
+      wait
+      gh auth status --show-token
+      echo "Logging out..."
+      gh auth logout
+      rm "$temp_file"
+    }
+    function get-github-token() {
+      temp_file=$(mktemp)
+      _get-github-token 2>&1 | tee "$temp_file" >&2
+      token=$(grep Token: "$temp_file" | cut -d ':' -f2 | tr -d ' ')
+      rm "$temp_file"
+      echo "$token"
+    }
   '';
 
   zshrc = ''
@@ -127,8 +155,15 @@ in {
 
   home.stateVersion = "24.05";
 
-  home.packages =
-    [ pkgs.htop pkgs.nerdfonts pkgs.atuin pkgs.zsh pkgs.btop pkgs.neovim ];
+  home.packages = [
+    pkgs.htop
+    pkgs.nerdfonts
+    pkgs.atuin
+    pkgs.zsh
+    pkgs.btop
+    pkgs.neovim
+    pkgs.gh
+  ];
 
   programs.zsh = {
     enable = true;
