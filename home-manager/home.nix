@@ -139,7 +139,7 @@ in {
 
     shellAliases = {
       "reload-home-manager" =
-        "zsh -c 'cd ~/projs/configs/home-manager && nix run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home'";
+        "zsh -c 'cd ~/projs/configs/home-manager && nix run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home' && zsh";
     };
     oh-my-zsh = { enable = true; };
   };
