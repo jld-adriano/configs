@@ -10,7 +10,7 @@ let
     unalias gap 2>/dev/null
     function gap(){
       git_root=$(git rev-parse --show-toplevel)
-      git status --porcelain | grep '^??' | cut -c4- | xargs -I{} git add -N $''${git_root}/{}
+      git status --porcelain | grep '^??' | cut -c4- | xargs -I{} git add -N ''${git_root}/{}
       git add -p $@
     }
 
@@ -25,11 +25,11 @@ let
       if [[ -z $1 ]]; then
         # List last 30 commits
         LAST_COMMITS=$(git log --pretty=format:"%h %s" -100 | grep -v "fixup")
-        LAST_COMMITS_COUNT=$(echo "$''${LAST_COMMITS}" | wc -l | tr -d ' ')
+        LAST_COMMITS_COUNT=$(echo "''${LAST_COMMITS}" | wc -l | tr -d ' ')
         # Select commit
-        SELECTED_COMMIT=$(echo "$''${LAST_COMMITS}" | fzf --height $''${LAST_COMMITS_COUNT} --reverse --border)
+        SELECTED_COMMIT=$(echo "''${LAST_COMMITS}" | fzf --height ''${LAST_COMMITS_COUNT} --reverse --border)
         # Get commit hash
-        COMMIT_HASH=$(echo "$''${SELECTED_COMMIT}" | awk '{print $1}')
+        COMMIT_HASH=$(echo "''${SELECTED_COMMIT}" | awk '{print $1}')
 
         if [[ -z $COMMIT_HASH ]]; then
           echo "No commit selected"
@@ -37,10 +37,10 @@ let
         fi
 
         # Fixup that commit
-        git commit --fixup "$''${COMMIT_HASH}"
+        git commit --fixup "''${COMMIT_HASH}"
         return 0
       fi
-      git commit --fixup "$''${@}"
+      git commit --fixup "''${@}"
     }
 
     # Pull rebase with squash
