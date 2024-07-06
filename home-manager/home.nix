@@ -163,6 +163,17 @@ let
       cd ${dir} && /nix/var/nix/profiles/default/bin/nix-shell --command '${cmd}'
     ''
   ];
+  bunDaemonAgent = name: dir: {
+    enable = true;
+    config = {
+      ProgramArguments =
+        generateProgramArguments dir "bun run --watch index.ts";
+      KeepAlive = true;
+      RunAtLoad = true;
+      StandardOutPath = "/tmp/${name}.log";
+      StandardErrorPath = "/tmp/${name}.error.log";
+    };
+  };
 in {
   home.username = "jldadriano";
   home.homeDirectory = "/Users/jldadriano";
@@ -216,16 +227,6 @@ in {
 
   home.sessionVariables = { REDITOR = "nvim"; };
 
-  launchd.agents.home-manager-daemon = {
-    enable = true;
-    config = {
-      ProgramArguments = generateProgramArguments
-        "${config.home.homeDirectory}/projs/configs/nix-home-manager-daemon/"
-        "bun run --watch index.ts";
-      KeepAlive = true;
-      RunAtLoad = true;
-      StandardOutPath = "/tmp/home-manager-daemon.log";
-      StandardErrorPath = "/tmp/home-manager-daemon.error.log";
-    };
-  };
+  launchd.agents.home-manager-daemon = bunDaemonAgent "home-manager-daemon"
+    "${config.home.homeDirectory}/projs/configs/nix-home-manager-daemon/";
 }
