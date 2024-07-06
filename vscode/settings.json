@@ -62,7 +62,6 @@
     "editor.defaultFormatter": "Prisma.prisma"
   },
   "tailwindCSS.experimental.classRegex": [],
-  "vscode-neovim.neovimExecutablePaths.darwin": "/opt/homebrew/opt/nvim/bin/nvim",
   "window.zoomLevel": 3,
   "editor.stickyScroll.enabled": true,
   "terminal.integrated.stickyScroll.enabled": true,
