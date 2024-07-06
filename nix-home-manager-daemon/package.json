@@ -1,0 +1,17 @@
+{
+  "name": "nix-home-manager-daemon",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/lodash": "^4.17.6",
+    "@types/node-notifier": "^8.0.5"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "lodash": "^4.17.21",
+    "node-notifier": "^10.0.1"
+  }
+}
