@@ -178,6 +178,11 @@ in {
     shellAliases = {
       "reload-home-manager" =
         "zsh -c 'cd ~/projs/configs/home-manager && nix run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home' && zsh";
+      "ba" = "bun add";
+      "bad" = "bun add --dev";
+      "bw" = "bun run --watch";
+      "br" = "bun remove";
+      "bi" = "bun install";
     };
     oh-my-zsh = { enable = true; };
   };
