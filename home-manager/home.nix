@@ -134,8 +134,8 @@ in {
   programs.zsh = {
     enable = true;
 
-    initExtraFirst = zshrc + gitAliases + randomAliases;
-    initExtra = postzshrc;
+    initExtraFirst = zshrc;
+    initExtra = postzshrc + gitAliases + randomAliases;
 
     shellAliases = {
       "reload-home-manager" =
