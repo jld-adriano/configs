@@ -8,5 +8,6 @@ pkgs.mkShellNoCC {
     cowsay
     lolcat
     coreutils
+    nixfmt
   ];
 }
