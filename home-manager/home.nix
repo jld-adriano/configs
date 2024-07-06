@@ -191,6 +191,7 @@ in {
     pkgs.fzf
     pkgs.reflex
     pkgs.bun
+    pkgs.cargo
   ];
   programs.home-manager.enable = true;
 
