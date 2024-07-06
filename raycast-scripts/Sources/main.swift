@@ -439,8 +439,8 @@ func moveToSpace(windowElement: AXUIElement, direction: Direction) {
   let mouseUpEvent = CGEvent(
     mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: mouseCursorPoint,
     mouseButton: .left)!
-  let kVK_RightArrow: UInt16 = 126
-  let kVK_LeftArrow: UInt16 = 124
+  let kVK_RightArrow: UInt16 = 124
+  let kVK_LeftArrow: UInt16 = 123
   let arrowKey = direction == .left ? kVK_LeftArrow : kVK_RightArrow
 
   let keyboardDownEvent = CGEvent(
@@ -466,8 +466,7 @@ func moveToSpace(windowElement: AXUIElement, direction: Direction) {
     script: """
       tell application "Mission Control"
           tell application "System Events"
-              key code 124 using {control down} -- Move to next space
-          
+              key code \(arrowKey) using {control down} -- Move to next space
           end tell
       end tell
       """)
@@ -482,35 +481,6 @@ func moveToSpace(windowElement: AXUIElement, direction: Direction) {
       end tell
       """)
   print("Mouse up event posted")
-}
-
-func moveToPreviousSpace(window: AXUIElement) {
-  let script = """
-    tell application "System Events"
-        set frontApp to first application process whose frontmost is true
-        set appName to name of frontApp
-        set appWindows to windows of frontApp
-        if (count of appWindows) is greater than 0 then
-            set frontWindow to item 1 of appWindows
-            tell frontWindow
-                perform action "AXRaise"
-            end tell
-        end if
-    end tell
-
-    tell application "Mission Control"
-        launch
-        delay 0.5
-        tell application "System Events"
-            key code 123 using {control down} -- Move to previous space
-        end tell
-        delay 0.5
-        tell application "System Events"
-            key code 53 -- Press Escape to exit Mission Control
-        end tell
-    end tell
-    """
-  runAppleScript(script: script)
 }
 
 enum Command {
