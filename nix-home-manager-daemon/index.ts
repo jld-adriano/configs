@@ -1,4 +1,4 @@
-import { debounce, throttle } from "lodash";
+import { throttle } from "lodash";
 import notifier from "node-notifier";
 import { execSync } from "node:child_process";
 import { watch } from "node:fs";
@@ -25,10 +25,7 @@ const runHomeManagerSwitch = () => {
   }
 };
 
-const throttledAndDebouncedRun = debounce(
-  throttle(runHomeManagerSwitch, 2000),
-  2000
-);
+const throttledRun = throttle(runHomeManagerSwitch, 5000);
 
 async function main() {
   console.log("====== Starting Home Manager Daemon ======");
@@ -37,7 +34,7 @@ async function main() {
   watch(homeManagerDir, { recursive: true }, (eventType, filename) => {
     if (filename) {
       console.log(`File changed: ${filename}`);
-      throttledAndDebouncedRun();
+      throttledRun();
     }
   });
 }
