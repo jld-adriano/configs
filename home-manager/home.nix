@@ -152,7 +152,6 @@ let
 in {
   home.username = "jldadriano";
   home.homeDirectory = "/Users/jldadriano";
-
   home.stateVersion = "24.05";
 
   home.packages = [
@@ -168,6 +167,7 @@ in {
     pkgs.reflex
     pkgs.bun
   ];
+  programs.home-manager.enable = true;
 
   programs.zsh = {
     enable = true;
@@ -202,6 +202,16 @@ in {
 
   home.sessionVariables = { REDITOR = "nvim"; };
 
-  # Let Home Manager install and manage itself.
-  programs.home-manager.enable = true;
+  launchd.agents.home-manager-daemon = {
+    enable = true;
+    config = {
+      ProgramArguments = [ "bun" "run" "--watch" "index.ts" ];
+      WorkingDirectory =
+        "${config.home.homeDirectory}/../nix-home-manager-daemon/";
+      KeepAlive = true;
+      RunAtLoad = true;
+      StandardOutPath = "/tmp/home-manager-daemon.log";
+      StandardErrorPath = "/tmp/home-manager-daemon.error.log";
+    };
+  };
 }
