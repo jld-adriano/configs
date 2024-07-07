@@ -13,17 +13,5 @@ sudo ln -s $(pwd)/nix.conf /etc/nix/nix.conf
 # Home manager setup
 nix run home-manager/release-24.05 -- switch --flake $(dirname $0)/home-manager#home
 
-# # Install Homebrew packages
-# brew install jq curl neovim fzf starship reflex github asdf
-# brew install jfryy/tap/qq 
-
-# asdf plugin add nodejs
-# asdf plugin add pnpm
-# asdf install nodejs 20.11.0
-
-# volta install node
-
-# # Install casks
-# brew install --cask cursor raycast
-
-# xargs -n 1 cursor --install-extension < vscode/extensions.list
+# TODO: Doesn't have a nix package :(
+brew install age-plugin-se
