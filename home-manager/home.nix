@@ -158,6 +158,8 @@ let
     function rwe() {
       age-env run-with-env ''${1} -- ''${@:2}
     }
+
+    alias gh="rwe gh gh"
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
