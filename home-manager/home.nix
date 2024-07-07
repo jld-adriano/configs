@@ -219,6 +219,11 @@ in {
     userName = "Adriano";
     userEmail = "jld.adriano@gmail.com";
   };
+  programs.direnv = {
+    enable = true;
+    enableZshIntegration = true;
+    nix-direnv.enable = true;
+  };
 
   # home.file = {
   #   # ... existing file configurations ...
