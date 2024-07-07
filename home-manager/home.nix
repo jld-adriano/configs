@@ -130,16 +130,21 @@ let
         reuse_window=$1
         name=$2
         if [ -z "$name" ]; then
-            name="$(find ~/projs -mindepth 1 -maxdepth 1 -type d | fzf --prompt="Select project file to edit (Ctrl+C to exit): ")"
+            dir="$(find ~/projs -mindepth 1 -maxdepth 1 -type d | fzf --prompt="Select project file to edit (Ctrl+C to exit): ")"
+        else
+          dir=~/projs/$name
         fi
-        if [ -z "$name" ]; then
+
+        if [ -z "$dir" ]; then
             echo "No project file to edit."
             return
         fi
+
+      
         if [ "$reuse_window" = true ]; then
-            cursor -r $name
+            cursor -r $dir
         else
-            cursor $name
+            cursor $dir
         fi
     }
     function crproj() {
