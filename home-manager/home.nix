@@ -153,6 +153,11 @@ let
     function cproj() {
         _cproj false $1
     }
+
+
+    function rwe() {
+      age-env run-with-env ''${1} -- ''${@:2}
+    }
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
