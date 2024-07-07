@@ -474,6 +474,10 @@
     }
   },
   {
+    "key": "cmd+g cmd+p",
+    "command": "git.push"
+  },
+  {
     "key": "cmd+g r",
     "command": "git.unstageAll"
   },
