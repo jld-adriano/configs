@@ -256,6 +256,7 @@ in {
     pkgs.age
     pkgs.spotify
     pkgs.discord
+    pkgs.kubectl
   ];
   programs.home-manager.enable = true;
 
