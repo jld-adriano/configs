@@ -19,6 +19,9 @@ let
       git -c color.ui=always status $@ | less -R
     }
 
+    unalias gr 2>/dev/null
+    alias gr="git reset"
+
     # Interactive fixup commit 
     unalias gcf 2>/dev/null
     function gcf(){
