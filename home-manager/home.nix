@@ -199,6 +199,11 @@ let
         apply_staged_state
       fi
     }
+
+    reinstall-age-env() {
+      brew uninstall age-env && brew untap jld-adriano/age-env && brew tap jld-adriano/age-env &&
+      brew install age-env && age-env list
+    }
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
