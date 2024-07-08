@@ -1,8 +1,26 @@
 {
   "nodes": {
-    "aws-console": {
+    "age-env": {
       "inputs": {
         "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1720454662,
+        "narHash": "sha256-PemSLmaYGZcLMv7JIsHDZzDjKh9Y0Bx/nk4TwY8DPSI=",
+        "owner": "jld-adriano",
+        "repo": "age-env",
+        "rev": "28a17901757fb96a42143d2633040eb42bca7289",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jld-adriano",
+        "repo": "age-env",
+        "type": "github"
+      }
+    },
+    "aws-console": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_2"
       },
       "locked": {
         "lastModified": 1,
@@ -37,6 +55,22 @@
     },
     "nixpkgs": {
       "locked": {
+        "lastModified": 1720031269,
+        "narHash": "sha256-rwz8NJZV+387rnWpTYcXaRNvzUSnnF9aHONoJIYmiUQ=",
+        "owner": "nixos",
+        "repo": "nixpkgs",
+        "rev": "9f4128e00b0ae8ec65918efeba59db998750ead6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nixos",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
         "lastModified": 1720401001,
         "narHash": "sha256-EiAbaSQZZMAInpfbpJ8TiE1ej+jTBpHUiHb+HnI3lVs=",
         "owner": "NixOS",
@@ -50,7 +84,7 @@
         "type": "github"
       }
     },
-    "nixpkgs_2": {
+    "nixpkgs_3": {
       "locked": {
         "lastModified": 1720031269,
         "narHash": "sha256-rwz8NJZV+387rnWpTYcXaRNvzUSnnF9aHONoJIYmiUQ=",
@@ -68,9 +102,10 @@
     },
     "root": {
       "inputs": {
+        "age-env": "age-env",
         "aws-console": "aws-console",
         "home-manager": "home-manager",
-        "nixpkgs": "nixpkgs_2"
+        "nixpkgs": "nixpkgs_3"
       }
     }
   },

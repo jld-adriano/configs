@@ -8,9 +8,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     aws-console.url = "path:../aws-console";
+    age-env.url = "github:jld-adriano/age-env";
   };
 
-  outputs = { nixpkgs, home-manager, aws-console, ... }:
+  outputs = { nixpkgs, home-manager, aws-console, age-env, ... }:
     let
       system = "aarch64-darwin";
 
@@ -25,7 +26,10 @@
         modules = [
           ./home.nix
           ({ pkgs, ... }: {
-            home.packages = [ aws-console.packages.${system}.default ];
+            home.packages = [
+              aws-console.packages.${system}.default
+              age-env.packages.${system}.default
+            ];
           })
         ];
 
