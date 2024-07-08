@@ -184,8 +184,8 @@ let
     alias gh="rwe gh gh"
 
     function flakebuild() {
-      is_dirty=$(git status -s)
-      if [[ -n $is_dirty ]]; then
+      is_staged=$(git diff --cached --name-only)
+      if [[ -n $is_staged ]]; then
         echo "Saving staged state"
         save_staged_state_and_reset
         echo "Adding all files"
@@ -194,7 +194,7 @@ let
       echo "Building flake"
       nix build $@
       git reset
-      if [[ -n $is_dirty ]]; then
+      if [[ -n $is_staged ]]; then
         echo "Staged state reapply"
         apply_staged_state
       fi
