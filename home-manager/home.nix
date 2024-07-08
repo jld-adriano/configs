@@ -284,7 +284,10 @@ in {
     oh-my-zsh = { enable = true; };
   };
 
-  programs.starship.enable = true;
+  programs.starship = {
+    enable = true;
+    settings = { kubernetes.disabled = false; };
+  };
   programs.git = {
     enable = true;
     userName = "Adriano";
