@@ -63,6 +63,27 @@ let
       GIT_SEQUENCE_EDITOR=true git rebase --autosquash -i --autostash
     }
 
+    function save_staged_state_and_reset() {
+      # Save the current staged state to a temporary file
+      local tmp_file=/tmp/staged_patch.patch
+      
+      git diff --cached > "$tmp_file"
+      echo "Staged state saved to $tmp_file"
+      
+      # Reset the repository
+      git reset
+    }
+
+    function apply_staged_state() {
+      local tmp_file=/tmp/staged_patch.patch
+      
+      
+      # Reapply the staged state
+      if ! git apply --cached < "$tmp_file"; then
+        echo "There was a problem applying the patch. The staged state is saved in $tmp_file"
+      fi
+    }
+
     function _get-github-token() {
       temp_file=$(mktemp)
       # Run gh auth login in the background and redirect output to a temp file
