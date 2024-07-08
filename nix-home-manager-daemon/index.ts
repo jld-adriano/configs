@@ -18,9 +18,14 @@ const runHomeManagerSwitch = () => {
       { stdio: "inherit" }
     );
     sendNotification("Home Manager switch executed successfully.");
-    console.log("====== Home Manager switch executed successfully ======");
+    console.log("====== Home Manager switch executed successfully======");
   } catch (error) {
-    sendNotification("Error executing Home Manager switch.");
+    notifier.notify({
+      title: "Home Manager Daemon",
+      subtitle: "Error executing Home Manager switch:",
+      message: (error as any).message,
+      sound: true,
+    });
     console.error("Error executing Home Manager switch:", error);
   }
 };
