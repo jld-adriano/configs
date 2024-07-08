@@ -182,6 +182,7 @@ let
     }
 
     alias gh="rwe gh gh"
+    alias ae="age-env"
 
     function flakebuild() {
       is_staged=$(git diff --cached --name-only)
