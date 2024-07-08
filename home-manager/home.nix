@@ -67,7 +67,7 @@ let
       # Save the current staged state to a temporary file
       local tmp_file=/tmp/staged_patch.patch
       
-      git diff --cached > "$tmp_file"
+      (cd $(git rev-parse --show-toplevel) && git diff --cached > "$tmp_file")
       echo "Staged state saved to $tmp_file"
       
       # Reset the repository
@@ -79,7 +79,8 @@ let
       
       
       # Reapply the staged state
-      if ! git apply --cached < "$tmp_file"; then
+      (cd $(git rev-parse --show-toplevel) && git apply --cached < "$tmp_file")
+      if [[ $? -ne 0 ]]; then
         echo "There was a problem applying the patch. The staged state is saved in $tmp_file"
       fi
     }
@@ -181,6 +182,23 @@ let
     }
 
     alias gh="rwe gh gh"
+
+    function flakebuild() {
+      is_dirty=$(git status -s)
+      if [[ -n $is_dirty ]]; then
+        echo "Saving staged state"
+        save_staged_state_and_reset
+        echo "Adding all files"
+      fi
+      git add -A
+      echo "Building flake"
+      nix build $@
+      git reset
+      if [[ -n $is_dirty ]]; then
+        echo "Staged state reapply"
+        apply_staged_state
+      fi
+    }
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
