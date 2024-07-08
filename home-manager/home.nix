@@ -243,6 +243,7 @@ in {
     pkgs.reflex
     pkgs.bun
     pkgs.cargo
+    pkgs.awscli2
   ];
   programs.home-manager.enable = true;
 
