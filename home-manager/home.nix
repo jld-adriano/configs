@@ -244,6 +244,7 @@ in {
     pkgs.bun
     pkgs.cargo
     pkgs.awscli2
+    pkgs.age
   ];
   programs.home-manager.enable = true;
 
