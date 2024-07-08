@@ -6,3 +6,4 @@ node_modules/
 *.generated.*
 **/*.generated
 **/*.generated.*
+.direnv/
