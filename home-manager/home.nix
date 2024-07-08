@@ -186,6 +186,9 @@ let
     function rwe() {
       age-env run-with-env ''${1} -- ''${@:2}
     }
+    function rwes() {
+      age-env run-with-env ''${1} -- zsh
+    }
 
     alias gh="rwe gh gh"
     alias ae="age-env"
