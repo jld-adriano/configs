@@ -131,6 +131,9 @@ let
 
   randomAliases = ''
     #/usr/bin/env zsh
+
+    alias awswho="aws sts get-caller-identity"
+
     alias configs="cursor $(dirname $0)"
     function delete-untracked-interactive() {
         git reset
