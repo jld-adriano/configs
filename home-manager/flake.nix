@@ -13,7 +13,11 @@
   outputs = { nixpkgs, home-manager, aws-console, ... }:
     let
       system = "aarch64-darwin";
-      pkgs = nixpkgs.legacyPackages.${system};
+
+      pkgs = import nixpkgs {
+        inherit system;
+        config.allowUnfree = true;
+      };
     in {
       homeConfigurations."home" = home-manager.lib.homeManagerConfiguration {
         inherit pkgs;

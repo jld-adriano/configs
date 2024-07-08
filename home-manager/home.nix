@@ -251,6 +251,8 @@ in {
     pkgs.cargo
     pkgs.awscli2
     pkgs.age
+    pkgs.spotify
+    pkgs.discord
   ];
   programs.home-manager.enable = true;
 
