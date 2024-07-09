@@ -186,17 +186,6 @@ let
         _cproj false $1
     }
 
-
-    function rwe() {
-      age-env run-with-env ''${1} -- ''${@:2}
-    }
-    function rwes() {
-      age-env run-with-env ''${1} -- zsh
-    }
-
-    alias gh="rwe gh gh"
-    alias ae="age-env"
-
     function flakebuild() {
       is_staged=$(git diff --cached --name-only)
       if [[ -n $is_staged ]]; then
@@ -244,6 +233,22 @@ let
       brew uninstall age-env && brew untap jld-adriano/age-env && brew tap jld-adriano/age-env &&
       brew install age-env && age-env list
     }
+  '';
+  ageEnvStuff = ''
+
+    function rwe() {
+      age-env run-with-env ''${1} -- ''${@:2}
+    }
+    function rwes() {
+      age-env run-with-env ''${1} -- zsh
+    }
+
+    alias gh="rwe gh gh"
+    alias ae="age-env"
+    function aes() {
+      age-env show -v ''${1} ''${2}
+    }
+
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
@@ -301,7 +306,7 @@ in {
     enable = true;
 
     initExtraFirst = zshrc;
-    initExtra = postzshrc + gitAliases + randomAliases;
+    initExtra = postzshrc + gitAliases + randomAliases + ageEnvStuff;
 
     shellAliases = {
       "reload-home-manager" =
