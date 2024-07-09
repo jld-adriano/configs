@@ -1,11 +1,8 @@
 let
   nixpkgs = fetchTarball "https://github.com/NixOS/nixpkgs/tarball/nixos-23.11";
-  pkgs = import nixpkgs { config = {}; overlays = []; };
-in
+  pkgs = import nixpkgs {
+    config = { };
+    overlays = [ ];
+  };
 
-pkgs.mkShellNoCC {
-  packages = with pkgs; [
-    coreutils
-    nixfmt
-  ];
-}
+in pkgs.mkShellNoCC { packages = with pkgs; [ coreutils nixfmt ]; }
