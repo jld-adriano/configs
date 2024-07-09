@@ -499,5 +499,21 @@
     "key": "ctrl+shift+right",
     "command": "-editor.action.smartSelect.expand",
     "when": "editorTextFocus"
+  },
+  {
+    "key": "cmd+g f",
+    "command": "runCommands",
+    "args": {
+      "commands": [
+        "workbench.action.terminal.new",
+        "workbench.action.toggleMaximizedPanel",
+        {
+          "command": "workbench.action.terminal.sendSequence",
+          "args": {
+            "text": "gcf; echo 'Command succeeded. Closing ...' && osascript -e 'tell application \"System Events\" to keystroke \"j\" using {command down}' && sleep 0.5 && exit || (echo 'Command failed. Press any key to close this terminal.' && read -n 1 -s)\u000D"
+          }
+        }
+      ]
+    }
   }
 ]
