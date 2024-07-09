@@ -462,7 +462,14 @@
     "command": "runCommands",
     "args": {
       "commands": [
-        "workbench.action.terminal.new",
+        {
+          "command": "workbench.action.terminal.new",
+          "args": {
+            "env": {
+              "DIRENV_LOG": ""
+            }
+          }
+        },
         "workbench.action.toggleMaximizedPanel",
         {
           "command": "workbench.action.terminal.sendSequence",
@@ -478,10 +485,18 @@
     "command": "runCommands",
     "args": {
       "commands": [
-        "workbench.action.terminal.new",
+        {
+          "command": "workbench.action.terminal.new",
+          "args": {
+            "env": {
+              "DIRENV_LOG": ""
+            }
+          }
+        },
         "workbench.action.toggleMaximizedPanel",
         {
           "command": "workbench.action.terminal.sendSequence",
+
           "args": {
             "text": "gprpsp && echo 'Command succeeded. Closing ...' && osascript -e 'tell application \"System Events\" to keystroke \"j\" using {command down}' && sleep 0.5 && exit || (echo 'Command failed. Press any key to close this terminal.' && read -n 1 -s)\u000D"
           }
@@ -517,7 +532,14 @@
     "command": "runCommands",
     "args": {
       "commands": [
-        "workbench.action.terminal.new",
+        {
+          "command": "workbench.action.terminal.new",
+          "args": {
+            "env": {
+              "DIRENV_LOG": ""
+            }
+          }
+        },
         "workbench.action.toggleMaximizedPanel",
         {
           "command": "workbench.action.terminal.sendSequence",
