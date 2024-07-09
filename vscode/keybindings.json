@@ -549,5 +549,35 @@
         }
       ]
     }
+  },
+  {
+    "key": "shift+alt+s",
+    "command": "go-to-next-change.go-to-next-scm-change"
+  },
+  {
+    "key": "alt+z",
+    "command": "-go-to-next-change.go-to-next-scm-change"
+  },
+  {
+    "key": "alt+cmd+a",
+    "command": "-go-to-next-change.go-to-previous-changed-file"
+  },
+  {
+    "key": "shift+alt+d",
+    "command": "-editor.detectLanguage",
+    "when": "editorTextFocus && !notebookEditable"
+  },
+  {
+    "key": "shift+alt+d",
+    "command": "go-to-next-change.go-to-previous-scm-change"
+  },
+  {
+    "key": "alt+a",
+    "command": "-go-to-next-change.go-to-previous-scm-change"
+  },
+  {
+    "key": "shift+alt+d",
+    "command": "-notebook.cell.detectLanguage",
+    "when": "notebookCellEditable && notebookEditable"
   }
 ]
