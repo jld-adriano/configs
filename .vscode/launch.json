@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "sourceLanguages": ["swift"],
+      "args": [],
+      "cwd": "${workspaceFolder:configs}/raycast-scripts",
+      "name": "Debug raycast-scripts (raycast-scripts)",
+      "program": "${workspaceFolder:configs}/raycast-scripts/.build/debug/raycast-scripts",
+      "preLaunchTask": "swift: Build Debug raycast-scripts (raycast-scripts)"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "sourceLanguages": ["swift"],
+      "args": [],
+      "cwd": "${workspaceFolder:configs}/raycast-scripts",
+      "name": "Release raycast-scripts (raycast-scripts)",
+      "program": "${workspaceFolder:configs}/raycast-scripts/.build/release/raycast-scripts",
+      "preLaunchTask": "swift: Build Release raycast-scripts (raycast-scripts)"
+    }
+  ]
+}
