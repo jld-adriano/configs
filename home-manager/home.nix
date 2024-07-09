@@ -210,6 +210,21 @@ let
       fi
     }
 
+    function ngt() {
+      export DIRENV_LOG_FORMAT=""
+      root=$(git rev-parse --show-toplevel)
+      package_json_files=$(cd $root && git ls-files --full-name **/package.json | sed 's/\/package.json$//')
+      temp_file=$(mktemp)
+      echo "$package_json_files" | fzf -q "$1" --select-1 --exit-0 | tee "$temp_file"
+      selected=$(cat "$temp_file")
+      rm "$temp_file"
+      if [[ -z $selected ]]; then
+        echo "No package.json file selected"
+        return 1
+      fi
+      cd $root/$selected
+    }
+
     reinstall-age-env() {
       brew uninstall age-env && brew untap jld-adriano/age-env && brew tap jld-adriano/age-env &&
       brew install age-env && age-env list
