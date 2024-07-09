@@ -263,6 +263,7 @@ in {
     pkgs.spotify
     pkgs.discord
     pkgs.kubectl
+    pkgs.postgresql
   ];
   programs.home-manager.enable = true;
 
