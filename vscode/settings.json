@@ -78,5 +78,6 @@
   "lldb.launch.expressions": "native",
   "[nix]": {
     "editor.defaultFormatter": "brettm12345.nixfmt-vscode"
-  }
+  },
+  "git.verboseCommit": true
 }
