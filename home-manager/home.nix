@@ -210,6 +210,17 @@ let
       fi
     }
 
+    function flakeupdate() {
+      is_staged=$(git diff --cached --name-only)
+      if [[ -n $is_staged ]]; then
+        echo "There are staged changes. Please commit or stash them before updating the flake."
+        return 1
+      fi
+      nix flake update
+      git add flake.lock
+      git commit --edit --message="Update flake"
+    }
+
     function ngt() {
       export DIRENV_LOG_FORMAT=""
       root=$(git rev-parse --show-toplevel)
