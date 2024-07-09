@@ -122,7 +122,7 @@ let
 
     # Oh My Zsh config
     ZSH_THEME="robbyrussell"
-    plugins=(git brew kubectl aws bun github)
+    plugins=(git brew kubectl aws bun github npm)
 
   '';
   postzshrc = ''
