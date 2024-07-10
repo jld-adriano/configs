@@ -235,7 +235,7 @@ let
 
     compdef _age-env-list-for-completions aes
     function aes() {
-      age-env show -v ''${1} ''${2}
+      age-env show -v ''${2} ''${1}
     }
 
     reinstall-age-env() {
