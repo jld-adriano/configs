@@ -214,6 +214,50 @@ let
       git commit --edit --message="Update flake"
     }
 
+
+  '';
+  ageEnvStuff = ''
+
+    function rwe() {
+      age-env run-with-env ''${1} -- ''${@:2}
+    }
+    function rwes() {
+      age-env run-with-env ''${1} -- zsh
+    }
+
+    alias gh="rwe gh gh"
+    alias ae="age-env"
+    function aes() {
+      age-env show -v ''${1} ''${2}
+    }
+    reinstall-age-env() {
+      brew uninstall age-env && brew untap jld-adriano/age-env && brew tap jld-adriano/age-env &&
+      brew install age-env && age-env list
+    }
+  '';
+  navigationTools = ''
+
+    function nfind() {
+      root=$(git rev-parse --show-toplevel)
+      package_json_files=$(cd $root && git ls-files --full-name **/package.json | sed 's/\/package.json$//')
+      match=$(echo "$package_json_files" | grep -x ".*/$1")
+      if [[ -n $match ]]; then
+        echo "$(realpath --relative-to=. "$root")/$match"
+      else
+        echo "No exact match found for $1" 1>&2
+        exit 1
+      fi
+    }
+
+    function _ngt_completions() {
+      local root=$(git rev-parse --show-toplevel)
+      local package_json_files=$(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//')
+      _values "package.json files" ''${(f)package_json_files}
+    }
+
+    compdef _ngt_completions ngt
+
+
     function ngt() {
       export DIRENV_LOG_FORMAT=""
       root=$(git rev-parse --show-toplevel)
@@ -235,38 +279,6 @@ let
         return 1
       fi
       cd $root/$selected
-    }
-
-    function nfind() {
-      root=$(git rev-parse --show-toplevel)
-      package_json_files=$(cd $root && git ls-files --full-name **/package.json | sed 's/\/package.json$//')
-      match=$(echo "$package_json_files" | grep -x ".*/$1")
-      if [[ -n $match ]]; then
-        echo "$(realpath --relative-to=. "$root")/$match"
-      else
-        echo "No exact match found for $1" 1>&2
-        exit 1
-      fi
-    }
-
-    reinstall-age-env() {
-      brew uninstall age-env && brew untap jld-adriano/age-env && brew tap jld-adriano/age-env &&
-      brew install age-env && age-env list
-    }
-  '';
-  ageEnvStuff = ''
-
-    function rwe() {
-      age-env run-with-env ''${1} -- ''${@:2}
-    }
-    function rwes() {
-      age-env run-with-env ''${1} -- zsh
-    }
-
-    alias gh="rwe gh gh"
-    alias ae="age-env"
-    function aes() {
-      age-env show -v ''${1} ''${2}
     }
 
   '';
@@ -327,7 +339,8 @@ in {
     enable = true;
 
     initExtraFirst = zshrc;
-    initExtra = postzshrc + gitAliases + randomAliases + ageEnvStuff;
+    initExtra = postzshrc + gitAliases + randomAliases + ageEnvStuff
+      + navigationTools;
 
     shellAliases = {
       "reload-home-manager" =
