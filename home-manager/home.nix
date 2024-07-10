@@ -217,7 +217,15 @@ let
     function ngt() {
       export DIRENV_LOG_FORMAT=""
       root=$(git rev-parse --show-toplevel)
-      package_json_files=$(cd $root && git ls-files --full-name **/package.json | sed 's/\/package.json$//')
+      cache_file="$root/.cache/ngt-pkg-json-list"
+      mkdir -p $root/.cache
+      if [[ -f $cache_file ]]; then
+        package_json_files=$(cat $cache_file)
+        $(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//'> $cache_file) >&/dev/null &
+      else
+        package_json_files=$(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//')
+        echo "$package_json_files" > $cache_file
+      fi
       temp_file=$(mktemp)
       echo "$package_json_files" | fzf -q "$1" --select-1 --exit-0 | tee "$temp_file"
       selected=$(cat "$temp_file")
