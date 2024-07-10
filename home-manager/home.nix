@@ -235,7 +235,11 @@ let
 
     compdef _age-env-list-for-completions aes
     function aes() {
-      age-env show -v ''${2} ''${1}
+      local v_flag
+      if [[ ! -z $2 ]]; then
+        v_flag="-v $2"
+      fi
+      age-env show $v_flag ''${1}
     }
 
     reinstall-age-env() {
