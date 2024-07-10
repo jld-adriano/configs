@@ -230,9 +230,24 @@ let
     function aes() {
       age-env show -v ''${1} ''${2}
     }
+
     reinstall-age-env() {
       brew uninstall age-env && brew untap jld-adriano/age-env && brew tap jld-adriano/age-env &&
       brew install age-env && age-env list
+    }
+
+    _ae-rewrite-completions() {
+      _values "age-env" $(age-env list --short)
+    }
+    compdef _ae-rewrite-completions ae-rewrite
+
+    ae-rewrite() {
+      contents=$(age-env show $1) 
+      echo "$contents" | vipe | age-env c -y $1
+      echo "previous contents:"
+      echo "$contents"
+      echo "new contents:"
+      age-env show $1
     }
   '';
   navigationTools = ''
