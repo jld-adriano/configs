@@ -319,6 +319,7 @@ in {
     pkgs.discord
     pkgs.kubectl
     pkgs.postgresql
+    pkgs.moreutils
   ];
   programs.home-manager.enable = true;
 
