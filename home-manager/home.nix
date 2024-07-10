@@ -229,6 +229,18 @@ let
       cd $root/$selected
     }
 
+    function nfind() {
+      root=$(git rev-parse --show-toplevel)
+      package_json_files=$(cd $root && git ls-files --full-name **/package.json | sed 's/\/package.json$//')
+      match=$(echo "$package_json_files" | grep -x ".*/$1")
+      if [[ -n $match ]]; then
+        echo "$(realpath --relative-to=. "$root")/$match"
+      else
+        echo "No exact match found for $1" 1>&2
+        exit 1
+      fi
+    }
+
     reinstall-age-env() {
       brew uninstall age-env && brew untap jld-adriano/age-env && brew tap jld-adriano/age-env &&
       brew install age-env && age-env list
