@@ -218,15 +218,22 @@ let
   '';
   ageEnvStuff = ''
 
+    alias ae="age-env"
+    _age-env-list-for-completions() {
+      _values "age-env" $(age-env list --short)
+    }
+    compdef _age-env-list-for-completions rwe
+    compdef _age-env-list-for-completions rwes
+
     function rwe() {
       age-env run-with-env ''${1} -- ''${@:2}
     }
+    alias gh="rwe gh gh"
     function rwes() {
       age-env run-with-env ''${1} -- zsh
     }
 
-    alias gh="rwe gh gh"
-    alias ae="age-env"
+    compdef _age-env-list-for-completions aes
     function aes() {
       age-env show -v ''${1} ''${2}
     }
@@ -236,10 +243,7 @@ let
       brew install age-env && age-env list
     }
 
-    _ae-rewrite-completions() {
-      _values "age-env" $(age-env list --short)
-    }
-    compdef _ae-rewrite-completions ae-rewrite
+    compdef _age-env-list-for-completions ae-rewrite
 
     ae-rewrite() {
       contents=$(age-env show $1) 
