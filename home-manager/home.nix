@@ -309,6 +309,9 @@ let
     function delete-all-my-aws-access-keys() {
       aws iam list-access-keys --user-name $(aws sts get-caller-identity --query "Arn" --output text | awk -F'/' '{print $NF}') --query 'AccessKeyMetadata[*].AccessKeyId' --output text  | xargs -n1 echo | xargs -n 1 -I {} aws iam delete-access-key --user-name $(aws sts get-caller-identity --query "Arn" --output text | awk -F'/' '{print $NF}') --access-key-id {}
     }
+    function get-aws-username() {
+      aws sts get-caller-identity --query "Arn" --output text | awk -F'/' '{print $NF}'
+    }
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
