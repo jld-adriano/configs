@@ -312,6 +312,13 @@ let
     function get-aws-username() {
       aws sts get-caller-identity --query "Arn" --output text | awk -F'/' '{print $NF}'
     }
+
+    function create-my-single-aws-token-env () {
+      delete-all-my-aws-access-keys 
+      aws iam create-access-key --user-name $(get-aws-username) --query 'AccessKey.{AccessKeyId:AccessKeyId,SecretAccessKey:SecretAccessKey}' --output json \
+      | jq -r '.AccessKeyId as $id | .SecretAccessKey as $key | "AWS_ACCESS_KEY_ID=\($id) \nAWS_SECRET_ACCESS_KEY=\($key)"' \
+      | vipe
+    }
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
