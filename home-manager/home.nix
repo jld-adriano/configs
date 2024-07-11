@@ -237,7 +237,7 @@ let
     function aes() {
       local v_flag
       if [[ ! -z $2 ]]; then
-        v_flag="-v $2"
+        v_flag="-v ''${2// /}"
       fi
       age-env show $v_flag ''${1}
     }
