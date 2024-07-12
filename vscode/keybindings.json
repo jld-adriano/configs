@@ -579,5 +579,20 @@
     "key": "shift+alt+d",
     "command": "-notebook.cell.detectLanguage",
     "when": "notebookCellEditable && notebookEditable"
+  },
+  {
+    "key": "ctrl+shift+alt+left",
+    "command": "editor.action.smartSelect.shrink",
+    "when": "editorTextFocus"
+  },
+  {
+    "key": "ctrl+shift+cmd+left",
+    "command": "-editor.action.smartSelect.shrink",
+    "when": "editorTextFocus"
+  },
+  {
+    "key": "ctrl+shift+alt+left",
+    "command": "-cursorWordPartLeftSelect",
+    "when": "textInputFocus"
   }
 ]
