@@ -70,6 +70,10 @@ let
       cd $(git rev-parse --show-toplevel)
     }
 
+    function rebi() {
+      git rebase --interactive --autostash HEAD~''${1:-10}
+    }
+
     function save_staged_state_and_reset() {
       # Save the current staged state to a temporary file
       local tmp_file=/tmp/staged_patch.patch
