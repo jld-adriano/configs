@@ -160,6 +160,8 @@ let
         done
     }
 
+    alias ex="cd ~/projs/monorepo"
+
     alias cr="cursor -r"
     alias c="cursor"
     function _cproj() {
