@@ -220,6 +220,7 @@ let
       git commit --edit --message="Update flake"
     }
 
+    alias dirrel="direnv reload"
 
   '';
   ageEnvStuff = ''
