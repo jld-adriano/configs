@@ -385,6 +385,8 @@ in {
     pkgs.kubectl
     pkgs.postgresql
     pkgs.moreutils
+    pkgs.wezterm
+    pkgs.tmux
   ];
   programs.home-manager.enable = true;
 
