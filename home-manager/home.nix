@@ -61,6 +61,10 @@ let
       gprps && git push
     }
 
+    function gprpspt() {
+      gprps && git push --tags
+    }
+
     # Rebase with autosquash and rebase
     function gass() {
       GIT_SEQUENCE_EDITOR=true git rebase --autosquash -i --autostash
