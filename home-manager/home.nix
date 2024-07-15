@@ -417,10 +417,11 @@ in {
     enable = true;
     userName = "Adriano";
     userEmail = "jld.adriano@gmail.com";
-    extraConfig = ''
-      [push]
-        autoSetupRemote = true
-    '';
+    extraConfig = {
+      push = {
+        autoSetupRemote = true;
+      };
+    };
   };
   programs.direnv = {
     enable = true;
