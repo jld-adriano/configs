@@ -594,5 +594,10 @@
     "key": "ctrl+shift+alt+left",
     "command": "-cursorWordPartLeftSelect",
     "when": "textInputFocus"
+  },
+  {
+    "key": "cmd+g shift+c",
+    "command": "git.commitNoVerify",
+    "when": "!operationInProgress"
   }
 ]
