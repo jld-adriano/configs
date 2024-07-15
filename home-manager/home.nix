@@ -74,6 +74,10 @@ let
       cd $(git rev-parse --show-toplevel)
     }
 
+    function gcv() {
+      git commit --no-verify $@
+    }
+
     function rebi() {
       git rebase --interactive --autostash HEAD~''${1:-10}
     }
