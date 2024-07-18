@@ -140,6 +140,8 @@ let
     ZSH_THEME="robbyrussell"
     plugins=(git brew kubectl aws bun github npm)
 
+    bindkey -v
+
   '';
   postzshrc = ''
     eval "$(atuin init zsh)"
@@ -387,6 +389,7 @@ in {
     pkgs.moreutils
     pkgs.wezterm
     pkgs.tmux
+    pkgs.eza
   ];
   programs.home-manager.enable = true;
 
@@ -399,7 +402,7 @@ in {
 
     shellAliases = {
       "reload-home-manager" =
-        "zsh -c 'cd ~/projs/configs/home-manager && nix run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home' && zsh";
+        "zsh -c 'cd ~/projs/configs/home-manager && nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home --extra-experimental-features nix-command --extra-experimental-features flakes' && zsh";
       "ba" = "bun add";
       "bad" = "bun add --dev";
       "bw" = "bun run --watch";
