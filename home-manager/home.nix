@@ -12,6 +12,13 @@ let
       git_root=$(git rev-parse --show-toplevel)
       git status --porcelain | grep '^??' | cut -c4- | xargs -I{} git add -N ''${git_root}/{}
       git add -p $@
+      cd $git_root
+      # Reset all unstaged new files
+      all_unstaged=$(git ls-files --modified --others --exclude-standard)
+      if [[ -n $all_unstaged ]]; then
+        git reset -- $all_unstaged
+      fi
+      cd -
     }
 
     # Pretty status
