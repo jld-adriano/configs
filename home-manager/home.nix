@@ -239,6 +239,13 @@ let
 
     alias dirrel="direnv reload"
 
+    function wait-for-port() {
+      while ! nc -z localhost $1; do
+        sleep 0.1
+      done
+      echo "Port $1 is open"
+    }
+
   '';
   ageEnvStuff = ''
 
