@@ -246,6 +246,10 @@ let
       echo "Port $1 is open"
     }
 
+    function apple-notify() {
+      osascript -e "display notification \"$2\" with title \"$1\""
+    }
+
   '';
   ageEnvStuff = ''
 
