@@ -7,8 +7,8 @@
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # aws-console.url = "path:../aws-console";
-    # age-env.url = "github:jld-adriano/age-env";
+    aws-console.url = "path:../aws-console";
+    age-env.url = "github:jld-adriano/age-env";
   };
 
   outputs = { nixpkgs, home-manager, aws-console, age-env, ... }:
@@ -27,8 +27,8 @@
           ./home.nix
           ({ pkgs, ... }: {
             home.packages = [
-              # aws-console.packages.${system}.default
-              # age-env.packages.${system}.default
+              aws-console.packages.${system}.default
+              age-env.packages.${system}.default
             ];
           })
         ];
