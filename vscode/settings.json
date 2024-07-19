@@ -87,5 +87,6 @@
       "label": "Commit (No Verify)",
       "script": "git commit --no-verify -m '${input:commitMessage}'"
     }
-  ]
+  ],
+  "git.confirmNoVerifyCommit": false
 }
