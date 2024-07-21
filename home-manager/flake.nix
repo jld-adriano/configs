@@ -18,20 +18,18 @@
       pkgs = import nixpkgs {
         inherit system;
         config.allowUnfree = true;
+        overlays = [
+          (self: super: {
+            age-env = age-env.packages.${system}.default;
+            aws-console = aws-console.packages.${system}.default;
+          })
+        ];
       };
     in {
       homeConfigurations."home" = home-manager.lib.homeManagerConfiguration {
         inherit pkgs;
 
-        modules = [
-          ./home.nix
-          ({ pkgs, ... }: {
-            home.packages = [
-              aws-console.packages.${system}.default
-              age-env.packages.${system}.default
-            ];
-          })
-        ];
+        modules = [ ./home.nix ];
 
         # Optionally use extraSpecialArgs
         # to pass through arguments to home.nix

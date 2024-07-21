@@ -426,6 +426,8 @@ in {
     pkgs.tmux
     pkgs.eza
     pkgs.fluxcd
+    pkgs.aws-console
+    pkgs.age-env
   ];
   programs.home-manager.enable = true;
 
