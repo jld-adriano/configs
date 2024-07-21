@@ -304,6 +304,10 @@ let
       echo "new contents:"
       age-env show $1
     }
+
+    aespre() {
+      eval $(age-env show-for-eval -l $1)
+    }
   '';
   navigationTools = ''
 
