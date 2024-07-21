@@ -253,6 +253,7 @@ let
     function create-sh-script() {
       echo "#!/usr/bin/env sh" > $1
       chmod +x $1
+      $EDITOR $1
     }
 
   '';
