@@ -355,6 +355,18 @@ let
       | vipe
     }
   '';
+  fluxCompletion = pkgs.writeTextFile {
+    name = "flux-completion.zsh";
+    text = builtins.readFile (pkgs.runCommand "generate-flux-completion" {
+      buildInputs = [ pkgs.fluxcd ];
+    } ''
+      mkdir -p $out
+      flux completion zsh > $out/flux-completion.zsh
+    '' + "/flux-completion.zsh");
+  };
+  completions = ''
+    source ${fluxCompletion}
+  '';
   generateProgramArguments = dir: cmd: [
     "zsh"
     "-c"
@@ -408,6 +420,7 @@ in {
     pkgs.wezterm
     pkgs.tmux
     pkgs.eza
+    pkgs.fluxcd
   ];
   programs.home-manager.enable = true;
 
@@ -416,7 +429,7 @@ in {
 
     initExtraFirst = zshrc;
     initExtra = postzshrc + gitAliases + randomAliases + ageEnvStuff
-      + navigationTools + awsTools;
+      + navigationTools + awsTools + completions;
 
     shellAliases = {
       "reload-home-manager" =
@@ -429,7 +442,7 @@ in {
     };
     oh-my-zsh = { enable = true; };
   };
-  
+
   programs.tmux = {
     enable = true;
     extraConfig = ''
@@ -456,11 +469,7 @@ in {
     enable = true;
     userName = "Adriano";
     userEmail = "jld.adriano@gmail.com";
-    extraConfig = {
-      push = {
-        autoSetupRemote = true;
-      };
-    };
+    extraConfig = { push = { autoSetupRemote = true; }; };
   };
   programs.direnv = {
     enable = true;
