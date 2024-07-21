@@ -81,8 +81,14 @@ let
       cd $(git rev-parse --show-toplevel)
     }
 
+    unalias gcv 2>/dev/null
     function gcv() {
       git commit --no-verify $@
+    }
+
+    unalias gca 2>/dev/null
+    function gca() {
+      git commit --amend
     }
 
     function rebi() {
