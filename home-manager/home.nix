@@ -369,8 +369,18 @@ let
       flux completion zsh > $out/flux-completion.zsh
     '' + "/flux-completion.zsh");
   };
+  ageEnvCompletion = pkgs.writeTextFile {
+    name = "age-env-completion.zsh";
+    text = builtins.readFile (pkgs.runCommand "generate-age-env-completion" {
+      buildInputs = [ pkgs.age pkgs.age-env ];
+    } ''
+      mkdir -p $out
+      age-env generate zsh > $out/age-env-completion.zsh
+    '' + "/age-env-completion.zsh");
+  };
   completions = ''
     source ${fluxCompletion}
+    source ${ageEnvCompletion}
   '';
   generateProgramArguments = dir: cmd: [
     "zsh"
