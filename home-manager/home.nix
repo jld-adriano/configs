@@ -250,6 +250,11 @@ let
       osascript -e "display notification \"$2\" with title \"$1\""
     }
 
+    function create-sh-script() {
+      echo "#!/usr/bin/env sh" > $1
+      chmod +x $1
+    }
+
   '';
   ageEnvStuff = ''
 
