@@ -15,3 +15,8 @@ nix run home-manager/release-24.05 -- switch --flake $(dirname $0)/home-manager#
 
 # TODO: Doesn't have a nix package :(
 brew install age-plugin-se
+
+# Link vscode settings to appropriate directories
+# If you use cursor, change Code to Cursor
+ln -s $(pwd)/vscode/settings.json ~/Library/Application\ Support/Code/User/settings.json
+ln -s $(pwd)/vscode/keybindings.json ~/Library/Application\ Support/Code/User/keybindings.json
