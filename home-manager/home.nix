@@ -123,6 +123,19 @@ let
       fi
     }
 
+    function g-rebase-branch-push-force() {
+      if [[ -z $1 ]]; then
+        echo "Please provide a branch name"
+        return 1
+      fi
+      main_branch=$(git branch --show-current)
+      gprpsp && \
+      gswitch $1 && \
+      git rebase $main_branch --autostash && \
+      git push --force && \
+      gswitch $main_branch
+    }
+
     function _get-github-token() {
       temp_file=$(mktemp)
       # Run gh auth login in the background and redirect output to a temp file
