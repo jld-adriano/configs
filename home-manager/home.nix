@@ -80,6 +80,12 @@ let
     function gitroot() {
       cd $(git rev-parse --show-toplevel)
     }
+    function gitr() {
+      gitroot
+    }
+    function gswitch() {
+      git stash && git switch $1 && git stash pop
+    }
 
     unalias gcv 2>/dev/null
     function gcv() {
