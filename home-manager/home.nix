@@ -129,6 +129,16 @@ let
       fi
     }
 
+    function gi-delete-merged() {
+      while true; do
+        branch=$(git branch --merged | grep -Ev "(^\*|master|main|dev|staging)" | sed 's/^[[:space:]]*//' | fzf --preview 'git log -n 20 --oneline {}' || true)
+        if [ -z "$branch" ]; then
+          break
+        fi
+        git branch -d "$branch" && echo ":DELETED $branch"
+      done
+    }
+
     function g-rebase-branch-push-force() {
       if [[ -z $1 ]]; then
         echo "Please provide a branch name"
