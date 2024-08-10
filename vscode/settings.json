@@ -88,5 +88,8 @@
       "script": "git commit --no-verify -m '${input:commitMessage}'"
     }
   ],
-  "git.confirmNoVerifyCommit": false
+  "git.confirmNoVerifyCommit": false,
+  "redhat.telemetry.enabled": true,
+  "git.suggestSmartCommit": false,
+  "python.analysis.inlayHints.variableTypes": true
 }
