@@ -9,9 +9,10 @@
     };
     aws-console.url = "path:../aws-console";
     age-env.url = "github:jld-adriano/age-env";
+    run-http.url = "github:jld-adriano/run-http";
   };
 
-  outputs = { nixpkgs, home-manager, aws-console, age-env, ... }:
+  outputs = { nixpkgs, home-manager, aws-console, age-env, run-http, ... }:
     let
       system = "aarch64-darwin";
 
@@ -22,6 +23,7 @@
           (self: super: {
             age-env = age-env.packages.${system}.default;
             aws-console = aws-console.packages.${system}.default;
+            run-http = run-http.packages.${system}.default;
           })
         ];
       };

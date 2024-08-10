@@ -485,6 +485,7 @@ in {
     pkgs.dive
     pkgs.aws-console
     pkgs.age-env
+    pkgs.run-http
   ];
   programs.home-manager.enable = true;
 
