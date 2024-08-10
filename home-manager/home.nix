@@ -466,6 +466,7 @@ in {
     pkgs.tmux
     pkgs.eza
     pkgs.fluxcd
+    pkgs.dive
     pkgs.aws-console
     pkgs.age-env
   ];
