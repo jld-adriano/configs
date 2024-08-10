@@ -86,6 +86,12 @@ let
     function gswitch() {
       git stash && git switch $1 && git stash pop
     }
+    function _gswitch_completion() {
+      local -a branches
+      branches=($(git branch --format='%(refname:short)'))
+      _describe 'branches' branches
+    }
+    compdef _gswitch_completion gswitch
 
     unalias gcv 2>/dev/null
     function gcv() {
