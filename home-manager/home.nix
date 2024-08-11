@@ -112,6 +112,25 @@ let
     function gca() {
       git commit --amend
     }
+    unalias gra 2>/dev/null
+    function gra() {
+      if [ $# -eq 0 ]; then
+        local branch=$(fzf-branch)
+        if [ -n "$branch" ]; then
+          git rebase --autostash "$branch"
+        else
+          echo "No branch selected"
+          return 1
+        fi
+      else
+          git rebase --autostash "$1"
+        fi
+    }
+
+    function fzf-branch() {
+      local branch=$(git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' | fzf --preview 'git log -n 10 --oneline {}')
+      echo $branch
+    }
 
     function rebi() {
       git rebase --interactive --autostash HEAD~''${1:-10}
