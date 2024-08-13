@@ -109,6 +109,9 @@ let
     function gcv() {
       git commit --no-verify $@
     }
+    function gcva() {
+      git commit --amend --no-verify $@
+    }
 
     unalias gca 2>/dev/null
     function gca() {
