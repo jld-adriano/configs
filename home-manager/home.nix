@@ -84,17 +84,17 @@ let
       gitroot
     }
     function gswitch() {
+      local branch
       if [ $# -eq 0 ]; then
-        local branch=$(git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' | fzf --preview 'git log -n 10 --oneline {}')
-        if [ -n "$branch" ]; then
-          git stash && git switch "$branch" && git stash pop
+        selected_branch=$(git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' | fzf --preview 'git log -n 10 --oneline {}')
+        if [ -n "$selected_branch" ]; then
+          branch=$selected_branch
         else
           echo "No branch selected"
           return 1
         fi
-      else
-        git stash && git switch "$1" && git stash pop
       fi
+      git reset && git stash && git switch "$branch" && git stash pop
     }
     function _gswitch_completion() {
       local -a branches
