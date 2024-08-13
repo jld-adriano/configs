@@ -93,6 +93,8 @@ let
           echo "No branch selected"
           return 1
         fi
+      else
+        branch=$1
       fi
       git reset && git stash && git switch "$branch" && git stash pop
     }
