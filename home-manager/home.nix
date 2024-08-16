@@ -234,7 +234,7 @@ let
 
     alias awswho="aws sts get-caller-identity"
 
-    alias configs="cursor $(dirname $0)"
+    alias configs="cursor ~/projs/configs"
     function delete-untracked-interactive() {
         git reset
         #fzf loop to delete untracked files
