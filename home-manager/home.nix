@@ -213,6 +213,10 @@ let
       rm "$temp_file"
       echo "$token"
     }
+
+    function share-wormhole-env() {
+      age-env show $1 | wormhole-rs send --rename $1 -
+    }
   '';
 
   zshrc = ''
@@ -520,6 +524,7 @@ in {
     pkgs.aws-console
     pkgs.age-env
     pkgs.run-http
+    pkgs.magic-wormhole-rs
   ];
   programs.home-manager.enable = true;
 

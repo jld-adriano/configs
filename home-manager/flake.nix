@@ -10,9 +10,11 @@
     aws-console.url = "path:../aws-console";
     age-env.url = "github:jld-adriano/age-env";
     run-http.url = "github:jld-adriano/run-http";
+    magic-wormhole-rs.url = "github:jld-adriano/magic-wormhole.rs";
   };
 
-  outputs = { nixpkgs, home-manager, aws-console, age-env, run-http, ... }:
+  outputs = { nixpkgs, home-manager, aws-console, age-env, run-http
+    , magic-wormhole-rs, ... }:
     let
       system = "aarch64-darwin";
 
@@ -24,6 +26,7 @@
             age-env = age-env.packages.${system}.default;
             aws-console = aws-console.packages.${system}.default;
             run-http = run-http.packages.${system}.default;
+            magic-wormhole-rs = magic-wormhole-rs.packages.${system}.default;
           })
         ];
       };
