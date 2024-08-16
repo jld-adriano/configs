@@ -91,5 +91,13 @@
   "git.confirmNoVerifyCommit": false,
   "redhat.telemetry.enabled": true,
   "git.suggestSmartCommit": false,
-  "python.analysis.inlayHints.variableTypes": true
+  "python.analysis.inlayHints.variableTypes": true,
+  "emeraldwalk.runonsave": {
+    "commands": [
+      {
+        "match": ".*",
+        "cmd": "echo ${file} && curl http://localhost:30067/restart"
+      }
+    ]
+  }
 }
