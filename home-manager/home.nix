@@ -215,7 +215,15 @@ let
     }
 
     function share-wormhole-env() {
-      age-env show $1 | wormhole-rs send --rename $1 -
+      age-env show $1 | wormhole-rs send --rename $1 - 2&>1 /tmp/wormhole_env_$1 &
+      wormhole_pid=$!
+      sleep 2
+      echo "Waiting for wormhole to finish"
+      secret_name=$(cat /tmp/wormhole_env_$1 | grep -v 'wormhole-rs send' | grep 'wormhole-rs receive' | awk '{print $4}')
+      echo "wormhole receive $secret_name" | pbcopy
+      echo "Copied to clipboard $secret_name"
+      wait $wormhole_pid
+      rm /tmp/wormhole_env_$1
     }
   '';
 
@@ -525,6 +533,7 @@ in {
     pkgs.age-env
     pkgs.run-http
     pkgs.magic-wormhole-rs
+    pkgs.slack-cli
   ];
   programs.home-manager.enable = true;
 
