@@ -343,6 +343,8 @@ let
       $EDITOR $1
     }
 
+    alias kd="kubectl describe"
+
   '';
   ageEnvStuff = ''
 
