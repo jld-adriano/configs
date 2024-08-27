@@ -21,6 +21,7 @@
       pkgs = import nixpkgs {
         inherit system;
         config.allowUnfree = true;
+        config.allowBroken = true;
         overlays = [
           (self: super: {
             age-env = age-env.packages.${system}.default;

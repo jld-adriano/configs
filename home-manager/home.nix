@@ -534,6 +534,7 @@ in {
     pkgs.run-http
     pkgs.magic-wormhole-rs
     pkgs.slack-cli
+    pkgs.zed-editor
   ];
   programs.home-manager.enable = true;
 
