@@ -438,6 +438,37 @@ let
       cd $root/$selected
     }
 
+    function _pgt_completions() {
+      local root=$(git rev-parse --show-toplevel)
+      local pyproj_files=$(cd $root && git ls-files --full-name | grep pyproject.toml | sed 's/\/pyproject.toml$//')
+      _values "pyproject.toml files" ''${(f)pyproj_files}
+    }
+
+    compdef _pgt_completions pgt
+
+    function pgt() {
+      export DIRENV_LOG_FORMAT=""
+      root=$(git rev-parse --show-toplevel)
+      cache_file="$root/.cache/pgt-pyproj-list"
+      mkdir -p $root/.cache
+      if [[ -f $cache_file ]]; then
+        pyproj_files=$(cat $cache_file)
+        $(cd $root && git ls-files --full-name | grep pyproject.toml | sed 's/\/pyproject.toml$//'> $cache_file) >&/dev/null &
+      else
+        pyproj_files=$(cd $root && git ls-files --full-name | grep pyproject.toml | sed 's/\/pyproject.toml$//')
+        echo "$pyproj_files" > $cache_file
+      fi
+      temp_file=$(mktemp)
+      echo "$pyproj_files" | fzf -q "$1" --select-1 --exit-0 | tee "$temp_file"
+      selected=$(cat "$temp_file")
+      rm "$temp_file"
+      if [[ -z $selected ]]; then
+        echo "No pyproject.toml file selected"
+        return 1
+      fi
+      cd $root/$selected
+    }
+
   '';
   awsTools = ''
     function delete-all-my-aws-access-keys() {
