@@ -99,5 +99,8 @@
         "cmd": "echo ${file} && curl http://localhost:30067/restart"
       }
     ]
+  },
+  "[terraform]": {
+    "editor.defaultFormatter": "hashicorp.terraform"
   }
 }
