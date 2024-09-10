@@ -102,5 +102,7 @@
   },
   "[terraform]": {
     "editor.defaultFormatter": "hashicorp.terraform"
-  }
+  },
+  "cursor.chat.smoothStreaming": true,
+  "cursor.chat.showSuggestedFiles": true
 }
