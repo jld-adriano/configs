@@ -5,11 +5,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1726545680,
-        "narHash": "sha256-szt1kmlRatWWJN4QO1PyhnVCUlTyBsumCHc6DqTaVSE=",
+        "lastModified": 1726546239,
+        "narHash": "sha256-teGWR4OlyCIv1ZZ/H/BRMoI5kbIHnTzNMPCWOkcwdbo=",
         "owner": "jld-adriano",
         "repo": "age-env",
-        "rev": "d7c52a0716dde1733fe0bc50419815d6ea9f9201",
+        "rev": "30505f8cdb9cb441d075ea7ed9f9426c141813d9",
         "type": "github"
       },
       "original": {
