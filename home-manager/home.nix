@@ -570,6 +570,7 @@ in {
     pkgs.bat
     pkgs.s5cmd
     # pkgs.zed-editor
+    pkgs.ncdu
   ];
   programs.home-manager.enable = true;
 
