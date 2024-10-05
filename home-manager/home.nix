@@ -225,6 +225,9 @@ let
       wait $wormhole_pid
       rm /tmp/wormhole_env_$1
     }
+
+    alias grc="git rebase --continue"
+
   '';
 
   zshrc = ''
