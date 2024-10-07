@@ -574,6 +574,7 @@ in {
     pkgs.s5cmd
     # pkgs.zed-editor
     pkgs.ncdu
+    pkgs.sq
   ];
   programs.home-manager.enable = true;
 
