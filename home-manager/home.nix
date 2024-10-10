@@ -575,6 +575,8 @@ in {
     # pkgs.zed-editor
     pkgs.ncdu
     pkgs.sq
+    pkgs.nil
+    pkgs.nixpkgs-fmt
   ];
   programs.home-manager.enable = true;
 
