@@ -2,7 +2,7 @@
   "editor.lineNumbers": "relative",
   "window.commandCenter": 1,
   "editor.fontFamily": "Consolas, 'JetBrains Mono', monospace",
-  "workbench.colorTheme": "Default High Contrast Light",
+  "workbench.colorTheme": "Penumbra Dark Contrast++",
   "editor.inlineSuggest.enabled": true,
   "terminal.integrated.env.osx": {
     "FIG_NEW_SESSION": "1"
