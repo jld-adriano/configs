@@ -599,5 +599,14 @@
     "key": "cmd+g shift+c",
     "command": "git.commitNoVerify",
     "when": "!operationInProgress"
+  },
+  {
+    "key": "cmd+r d",
+    "command": "git.revertSelectedRanges",
+    "when": "!operationInProgress"
+  },
+  {
+    "key": "cmd+r d",
+    "command": "-workbench.files.action.compareWithSaved"
   }
 ]
