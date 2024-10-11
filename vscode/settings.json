@@ -40,7 +40,7 @@
   "git.autofetch": true,
   "editor.unicodeHighlight.ambiguousCharacters": false,
   "[python]": {
-    "editor.defaultFormatter": "ms-python.black-formatter"
+    "editor.defaultFormatter": "charliermarsh.ruff"
   },
   "[typescriptreact]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
