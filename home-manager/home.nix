@@ -577,6 +577,9 @@ in {
     pkgs.sq
     pkgs.nil
     pkgs.nixpkgs-fmt
+    pkgs.git-cola
+    pkgs.gitui
+    pkgs.lazygit
   ];
   programs.home-manager.enable = true;
 
