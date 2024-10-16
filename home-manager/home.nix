@@ -584,6 +584,7 @@ in {
     pkgs.git-cola
     pkgs.gitui
     pkgs.lazygit
+    pkgs.llm
   ];
   programs.home-manager.enable = true;
 
