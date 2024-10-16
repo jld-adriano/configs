@@ -585,6 +585,7 @@ in {
     pkgs.gitui
     pkgs.lazygit
     pkgs.llm
+    pkgs.git-filter-repo
   ];
   programs.home-manager.enable = true;
 
