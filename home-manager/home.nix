@@ -140,6 +140,10 @@ let
     function rebi() {
       git rebase --interactive --autostash HEAD~''${1:-10}
     }
+    
+    function rebisquash() {
+      git rebase --interactive --autostash --autosquash HEAD~''${1:-10}
+    }
 
     function save_staged_state_and_reset() {
       # Save the current staged state to a temporary file
