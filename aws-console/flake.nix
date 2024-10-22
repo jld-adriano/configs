@@ -26,8 +26,8 @@
               sha256 = "sha256-T1H2FGcc53NsnZFy8w3cB61MLjro2vXhcagx32Id16g==";
             };
 
-            buildInputs = [ pkgs.go ];
-
+            nativeBuildInputs = [ pkgs.go pkgs.git pkgs.cacert ];
+            buildInputs = [ pkgs.openssl ];
             buildPhase = ''
               export GOPATH=$(pwd)/go
               export GOCACHE=$(pwd)/.go-cache
