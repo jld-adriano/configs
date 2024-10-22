@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env sh
 
 set -eo pipefail
 
@@ -7,6 +7,7 @@ if [ ! -f /etc/nix/nix.conf ] && [ ! $(which nix) ]; then
   sh <(curl -L https://nixos.org/nix/install)
 fi
 
+sudo mkdir -p /etc/nix
 sudo rm -rf /etc/nix/nix.conf
 sudo ln -s $(pwd)/nix.conf /etc/nix/nix.conf
 
