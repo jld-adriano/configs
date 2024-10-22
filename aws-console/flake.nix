@@ -31,6 +31,8 @@
             buildPhase = ''
               export GOPATH=$(pwd)/go
               export GOCACHE=$(pwd)/.go-cache
+              export GOPRIVATE=*
+              export GOPROXY=off
 
               mkdir -p $GOPATH/src/github.com/${owner}
               ln -s $src $GOPATH/src/github.com/${owner}/${repo}
