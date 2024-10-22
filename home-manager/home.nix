@@ -586,6 +586,7 @@ in {
     pkgs.lazygit
     pkgs.llm
     pkgs.git-filter-repo
+    pkgs.devbox
   ];
   programs.home-manager.enable = true;
 
