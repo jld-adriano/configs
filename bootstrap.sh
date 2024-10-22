@@ -11,6 +11,10 @@ sudo mkdir -p /etc/nix
 sudo rm -rf /etc/nix/nix.conf
 sudo ln -s $(pwd)/nix.conf /etc/nix/nix.conf
 
+cd aws-console
+nix develop --command "echo 'Hello'"
+cd ..
+
 # Home manager setup
 nix run home-manager/release-24.05 -- switch --flake $(dirname $0)/home-manager#home
 
