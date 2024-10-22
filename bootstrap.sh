@@ -12,7 +12,7 @@ sudo rm -rf /etc/nix/nix.conf
 sudo ln -s $(pwd)/nix.conf /etc/nix/nix.conf
 
 cd aws-console
-nix develop --command "echo 'Hello'"
+nix develop --command echo 'Hello'
 cd ..
 
 # Home manager setup
