@@ -144,6 +144,55 @@ let
     function rebisquash() {
       git rebase --interactive --autostash --autosquash HEAD~''${1:-10}
     }
+    
+    function g-clean-worktree () {
+    
+        trap 'echo -e "\nInterrupted by user"; exit 1' INT
+
+        while true; do
+            # List only sub-worktrees (exclude main worktree) and select
+            WORKTREE=$(git worktree list | sed '1d' | fzf --height 80% --reverse) || exit 0
+
+            if [ -n "$WORKTREE" ]; then
+                WORKTREE_PATH=$(echo "$WORKTREE" | awk '{print $1}')
+                git worktree remove --force "$WORKTREE_PATH"
+                echo "Removed worktree: $WORKTREE_PATH"
+            fi
+        done
+    }
+
+    function gh-pr-worktree () {
+      export AGE_ENV_CONFIG_DIR=$HOME/.age-env
+      eval "$(age-env show-for-eval gh)"
+      
+      # select pr
+      pr=$(gh pr list --state open --json number,title --jq '.[] | "\(.number): \(.title)"' | fzf --prompt="Select PR: ")
+      if [[ -z $pr ]]; then
+        echo "No PR selected"
+        return 1
+      fi
+
+      echo "Selected PR: $pr"
+      # extract the PR number
+      pr_number=$(echo $pr | cut -d':' -f1)
+      if [[ -z $pr_number ]]; then
+        echo "No pull requests found"
+        return 1
+      fi
+      branch=$(gh pr view $pr_number --json headRefName --jq '.headRefName')
+      if [[ -z $branch ]]; then
+        echo "Failed to fetch branch for PR $pr_number"
+        return 1
+      fi
+      sanitized_branch=$(echo $branch | tr '/' '-')
+      root=$(git rev-parse --show-toplevel)
+      git worktree add $root/worktree-prs/$pr__$sanitized_branch $branch
+
+      cursor $root/worktree-prs/$pr__$sanitized_branch
+      cd $root/worktree-prs/$pr__$sanitized_branch
+      direnv allow
+      nix develop
+    }
 
     function save_staged_state_and_reset() {
       # Save the current staged state to a temporary file
