@@ -597,6 +597,7 @@ in {
     pkgs.htop
     pkgs.nerdfonts
     pkgs.atuin
+    pkgs.pv
     pkgs.zsh
     pkgs.btop
     pkgs.neovim
