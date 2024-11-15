@@ -303,6 +303,7 @@ let
     alias awswho="aws sts get-caller-identity"
 
     alias configs="cursor ~/projs/configs"
+    alias configsnvim="nvim ~/projs/configs/home-manager/home.nix"
     function delete-untracked-interactive() {
         git reset
         #fzf loop to delete untracked files
