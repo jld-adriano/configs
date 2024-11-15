@@ -602,6 +602,7 @@ in {
     pkgs.btop
     pkgs.neovim
     pkgs.gh
+    pkgs.redis
     pkgs.curl
     pkgs.fzf
     pkgs.reflex
