@@ -61,7 +61,7 @@ let
         echo "You are in the middle of a rebase. Finish it before pushing"
         return 1
       fi
-      git reset && sleep 0.3 && git pull --rebase --autostash && gass
+      git reset && sleep 0.3 && git pull --rebase=merges --autostash && gass
     }
 
     function gprpsp() {
@@ -74,7 +74,7 @@ let
 
     # Rebase with autosquash and rebase
     function gass() {
-      GIT_SEQUENCE_EDITOR=true git rebase --autosquash -i --autostash
+      GIT_SEQUENCE_EDITOR=true git rebase --rebase-merges --autosquash -i --autostash
     }
 
     function gitroot() {
@@ -140,13 +140,13 @@ let
     function rebi() {
       git rebase --interactive --autostash HEAD~''${1:-10}
     }
-    
+
     function rebisquash() {
       git rebase --interactive --autostash --autosquash HEAD~''${1:-10}
     }
-    
+
     function g-clean-worktree () {
-    
+
         trap 'echo -e "\nInterrupted by user"; exit 1' INT
 
         while true; do
