@@ -281,6 +281,26 @@ let
 
     alias grc="git rebase --continue"
 
+    unalias gcp 2>/dev/null
+    function gcp() {
+      # Get branch to cherry-pick from
+      local branch=$(git for-each-ref --sort='-creatordate' refs/heads/ --format='%(refname:short)' | fzf --preview 'git log -n 10 --oneline {}')
+      if [[ -z "$branch" ]]; then
+        echo "No branch selected"
+        return 1
+      fi
+
+      # Get commit to cherry-pick
+      local commit=$(git log "$branch" --pretty=format:"%h %s" | fzf --preview 'git show --color {1}' | awk '{print $1}')
+      if [[ -z "$commit" ]]; then
+        echo "No commit selected"
+        return 1
+      fi
+
+      # Cherry-pick the selected commit
+      git cherry-pick "$commit"
+    }
+
   '';
 
   zshrc = ''
