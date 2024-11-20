@@ -659,6 +659,10 @@ in {
     pkgs.llm
     pkgs.git-filter-repo
     pkgs.devbox
+    # for exa stuff
+    pkgs.protobuf
+    pkgs.pnpm
+    pkgs.nodejs
   ];
   programs.home-manager.enable = true;
 
