@@ -619,7 +619,9 @@ in {
     pkgs.nerdfonts
     pkgs.atuin
     pkgs.pv
+    pkgs.terminal-notifier
     pkgs.zsh
+    pkgs.ripgrep
     pkgs.btop
     pkgs.neovim
     pkgs.gh
