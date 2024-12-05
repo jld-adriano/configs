@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Refuse if in the middle of a rebase
+git status | grep -q 'rebase in progress';
+if [[ $? -eq 0 ]]; then
+  echo "You are in the middle of a rebase. Finish it before pushing"
+  exit 1
+fi
+git reset && sleep 0.3 && git pull --rebase=merges --autostash && gass 

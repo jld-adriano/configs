@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+GIT_SEQUENCE_EDITOR=true git rebase --rebase-merges --autosquash -i --autostash 

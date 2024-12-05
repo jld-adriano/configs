@@ -53,30 +53,6 @@ let
       git commit --fixup "''${@}"
     }
 
-    # Pull rebase with squash
-    function gprps() {
-      # Refuse if in the middle of a rebase
-      git status | grep -q 'rebase in progress';
-      if [[ $? -eq 0 ]]; then
-        echo "You are in the middle of a rebase. Finish it before pushing"
-        return 1
-      fi
-      git reset && sleep 0.3 && git pull --rebase=merges --autostash && gass
-    }
-
-    function gprpsp() {
-      gprps && git push
-    }
-
-    function gprpspt() {
-      gprps && git push --tags
-    }
-
-    # Rebase with autosquash and rebase
-    function gass() {
-      GIT_SEQUENCE_EDITOR=true git rebase --rebase-merges --autosquash -i --autostash
-    }
-
     function gitroot() {
       cd $(git rev-parse --show-toplevel)
     }
@@ -609,6 +585,18 @@ let
       StandardErrorPath = "/tmp/${name}.error.log";
     };
   };
+
+  # Create derivation for git scripts
+  gitScripts = pkgs.stdenvNoCC.mkDerivation {
+    name = "git-scripts";
+    src = ./scripts;
+    installPhase = ''
+      mkdir -p $out/bin
+      cp * $out/bin/
+      chmod +x $out/bin/*
+    '';
+  };
+
 in {
   home.username = "jldadriano";
   home.homeDirectory = "/Users/jldadriano";
@@ -665,6 +653,7 @@ in {
     pkgs.protobuf
     pkgs.pnpm
     pkgs.nodejs
+    gitScripts
   ];
   programs.home-manager.enable = true;
 
