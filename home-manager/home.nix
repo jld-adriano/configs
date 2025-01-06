@@ -300,6 +300,7 @@ let
 
     alias configs="cursor ~/projs/configs"
     alias configsnvim="nvim ~/projs/configs/home-manager/home.nix"
+
     function delete-untracked-interactive() {
         git reset
         #fzf loop to delete untracked files
@@ -316,8 +317,6 @@ let
             rm "$file"
         done
     }
-
-    alias ex="cd ~/projs/monorepo"
 
     alias cr="cursor -r"
     alias c="cursor"
@@ -397,8 +396,73 @@ let
     }
 
     alias kd="kubectl describe"
-
   '';
+
+  exaSpecificAliases = ''
+    #/usr/bin/env zsh
+
+    alias ex="cd ~/projs/monorepo"
+
+    function _get_next_repo_index() {
+      local max_index=0
+      # Check if directory exists and has any matching files
+      if [[ -d ~/monorepos ]] && compgen -G ~/monorepos/monorepo-* > /dev/null; then
+        for dir in ~/monorepos/monorepo-*; do
+          if [[ -d "$dir" ]]; then
+            local index=$(basename "$dir" | grep -o '[0-9]\+' || echo "0")
+            if [[ $index -gt $max_index ]]; then
+              max_index=$index
+            fi
+          fi
+        done
+      fi
+      echo $((max_index + 1))
+    }
+
+    function newrepo() {
+      local custom_name=$1
+      local next_index=$(_get_next_repo_index)
+      local name
+      
+      if [[ -n "$custom_name" ]]; then
+        name="monorepo-''${next_index}-''${custom_name}"
+      else
+        name="monorepo-''${next_index}"
+      fi
+      
+      local target_dir=~/monorepos/$name
+      
+      # Create monorepos directory if it doesn't exist
+      mkdir -p ~/monorepos
+      
+      # Clone the repository
+      git clone git@github.com:exa-labs/monorepo $target_dir
+      
+      # Change to the directory
+      cd $target_dir
+      
+      # Run preload script
+      bin/preload-all-direnvs.sh
+      
+      # Open in cursor
+      cursor .
+    }
+
+    function gotorepo() {
+      local selected_dir=$(ls -dt ~/monorepos/* 2>/dev/null | fzf --preview 'ls -la {}')
+      if [[ -n "$selected_dir" ]]; then
+        cd "$selected_dir"
+      fi
+    }
+
+    function gotorepoc() {
+      local selected_dir=$(ls -dt ~/monorepos/* 2>/dev/null | fzf --preview 'ls -la {}')
+      if [[ -n "$selected_dir" ]]; then
+        cd "$selected_dir" && cursor .
+      fi
+    }
+  '';
+
   ageEnvStuff = ''
 
     alias ae="age-env"
@@ -665,7 +729,7 @@ in {
 
     initExtraFirst = zshrc;
     initExtra = postzshrc + gitAliases + randomAliases + ageEnvStuff
-      + navigationTools + awsTools + completions;
+      + navigationTools + awsTools + exaSpecificAliases + completions;
 
     shellAliases = {
       "reload-home-manager" =
