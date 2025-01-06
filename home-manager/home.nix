@@ -616,6 +616,7 @@ in {
     pkgs.redis
     pkgs.curl
     pkgs.fzf
+    pkgs.ghostty
     pkgs.reflex
     pkgs.bun
     pkgs.cargo
