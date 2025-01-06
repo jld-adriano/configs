@@ -441,8 +441,13 @@ let
       # Change to the directory
       cd $target_dir
       
+      # Create my-user file
+      echo "adriano" > my-user
+      
       # Run preload script
       bin/preload-all-direnvs.sh
+
+      bin/pnpm-install-all.sh
       
       # Open in cursor
       cursor .
