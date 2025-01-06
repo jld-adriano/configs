@@ -604,7 +604,8 @@ in {
 
   home.packages = [
     pkgs.htop
-    pkgs.nerdfonts
+    pkgs.nerd-fonts.droid-sans-mono
+    pkgs.nerd-fonts.fira-code
     pkgs.atuin
     pkgs.pv
     pkgs.terminal-notifier
