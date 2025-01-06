@@ -611,6 +611,7 @@ in {
     pkgs.terminal-notifier
     pkgs.zsh
     pkgs.ripgrep
+    pkgs.nodePackages.vercel
     pkgs.btop
     pkgs.neovim
     pkgs.gh
