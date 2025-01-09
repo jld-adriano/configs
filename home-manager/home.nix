@@ -316,6 +316,106 @@ let
       git cherry-pick "$commit"
     }
 
+    alias awswho="aws sts get-caller-identity"
+
+    alias configs="cursor ~/projs/configs"
+    alias configsnvim="nvim ~/projs/configs/home-manager/home.nix"
+
+    function delete-untracked-interactive() {
+        git reset
+        #fzf loop to delete untracked files
+        while true; do
+            untracked_files=$(git ls-files --others --exclude-standard)
+            if [ -z "$untracked_files" ]; then
+                echo "No untracked files to delete."
+                return
+            fi
+            file=$(echo "$untracked_files" | fzf --prompt="Select file to delete (Ctrl+C to exit): ")
+            if [ -z "$file" ]; then
+                break
+            fi
+            rm "$file"
+        done
+    }
+
+    alias cr="cursor -r"
+    alias c="cursor"
+    function _cproj() {
+        reuse_window=$1
+        name=$2
+        if [ -z "$name" ]; then
+            dir="$(find ~/projs -mindepth 1 -maxdepth 1 -type d | fzf --prompt="Select project file to edit (Ctrl+C to exit): ")"
+        else
+          dir=~/projs/$name
+        fi
+
+        if [ -z "$dir" ]; then
+            echo "No project file to edit."
+            return
+        fi
+
+      
+        if [ "$reuse_window" = true ]; then
+            cursor -r $dir
+        else
+            cursor $dir
+        fi
+    }
+    function crproj() {
+        _cproj true $1
+    }
+    function cproj() {
+        _cproj false $1
+    }
+
+    function flakebuild() {
+      is_staged=$(git diff --cached --name-only)
+      if [[ -n $is_staged ]]; then
+        echo "Saving staged state"
+        save_staged_state_and_reset
+        echo "Adding all files"
+      fi
+      git add -A
+      echo "Building flake"
+      nix build $@
+      git reset
+      if [[ -n $is_staged ]]; then
+        echo "Staged state reapply"
+        apply_staged_state
+      fi
+    }
+
+    function flakeupdate() {
+      is_staged=$(git diff --cached --name-only)
+      if [[ -n $is_staged ]]; then
+        echo "There are staged changes. Please commit or stash them before updating the flake."
+        return 1
+      fi
+      nix flake update
+      git add flake.lock
+      git commit --edit --message="Update flake"
+    }
+
+    alias dirrel="direnv reload"
+
+    function wait-for-port() {
+      while ! nc -z localhost $1; do
+        sleep 0.1
+      done
+      echo "Port $1 is open"
+    }
+
+    function apple-notify() {
+      osascript -e "display notification \"$2\" with title \"$1\""
+    }
+
+    function create-sh-script() {
+      echo "#!/usr/bin/env sh" > $1
+      chmod +x $1
+      $EDITOR $1
+    }
+
+    alias kd="kubectl describe"
   '';
 
   zshrc = ''
