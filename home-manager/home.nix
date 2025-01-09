@@ -4,7 +4,7 @@ let
     #!/usr/bin/env zsh
 
     alias gcane="git commit --amend --no-edit"
-    alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit"
+    alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit | less -R"
 
     function subinit() {
       git submodule update --init --recursive
@@ -912,7 +912,14 @@ in {
     enable = true;
     userName = "Adriano";
     userEmail = "jld.adriano@gmail.com";
-    extraConfig = { push = { autoSetupRemote = true; }; };
+    extraConfig = {
+      push = { autoSetupRemote = true; };
+      pager = {
+        branch = false;
+        diff = false;
+        log = false;
+      };
+    };
   };
   programs.direnv = {
     enable = true;
