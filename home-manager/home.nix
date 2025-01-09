@@ -6,6 +6,12 @@ let
     alias gcane="git commit --amend --no-edit"
     alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit"
 
+    function subinit() {
+      git submodule update --init --recursive
+      git submodule foreach --recursive git fetch
+      git submodule foreach git merge origin/HEAD
+    }
+
     # Interactive add new files
     unalias gap 2>/dev/null
     function gap(){
