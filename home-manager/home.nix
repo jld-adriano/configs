@@ -170,6 +170,39 @@ let
       nix develop
     }
 
+    function gh-pr-c () {
+      # Get the current branch name
+      current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+      # Get the default branch (usually main or master)
+      default_branch=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
+
+      # Get list of users with access to the repo
+      users=$(gh api repos/:owner/:repo/collaborators --jq '.[].login')
+
+      # Interactively select a reviewer
+      reviewer=$(echo "$users" | fzf --prompt="Select a reviewer: ")
+
+      # Get list of commits since branching from default branch
+      commits=$(git log $default_branch..$current_branch --pretty=format:"%s")
+      # Allow user to provide a custom title, select from commits, or enter interactively
+      if [[ -z "$1" ]]; then
+        options="$commits\nEnter custom title"
+        selected=$(echo -e "$options" | fzf --prompt="Select or enter a title for the PR: ")
+        if [[ "$selected" == "Enter custom title" ]]; then
+          echo -n "Enter custom title: "
+          read -r title
+        else
+          title="$selected"
+        fi
+      else
+        title="$1"
+      fi
+
+      # Create PR with selected reviewer and title
+      gh pr create --reviewer "$reviewer" --title "$title" --body ""
+    }
+
     function save_staged_state_and_reset() {
       # Save the current staged state to a temporary file
       local tmp_file=/tmp/staged_patch.patch
@@ -544,7 +577,7 @@ let
       mkdir -p $root/.cache
       if [[ -f $cache_file ]]; then
         package_json_files=$(cat $cache_file)
-        $(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//'> $cache_file) >&/dev/null &
+        { chronic $(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//'> $cache_file) } &>/dev/null &
       else
         package_json_files=$(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//')
         echo "$package_json_files" > $cache_file
