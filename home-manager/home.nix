@@ -416,6 +416,11 @@ let
     }
 
     alias kd="kubectl describe"
+
+    unalias gst 2>/dev/null
+    function gst() {
+      git stash ''${@}
+    }
   '';
 
   zshrc = ''
