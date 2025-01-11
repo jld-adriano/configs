@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+
+icon="caution"
+
+# Parse options
+while getopts "i:" opt; do
+    case $opt in
+        i) icon="$OPTARG" ;;
+        \?) echo "Invalid option: -$OPTARG" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND-1))
+
+# Check if a message was provided
+if [ $# -eq 0 ]; then
+    echo "Usage: confirm [-i icon] \"Your question here?\" [default_button]"
+    echo "default_button: 'yes' or 'no' (defaults to 'no' if not specified)"
+    echo "icon: 'caution', 'note', 'stop' (defaults to 'caution')"
+    exit 1
+fi
+
+# Set default button based on second parameter
+default_button="No"
+if [ "$2" = "yes" ]; then
+    default_button="Yes"
+fi
+
+# Run the AppleScript dialog and capture the result
+result=$(osascript -e "display dialog \"$1\" buttons {\"No\", \"Yes\"} default button \"$default_button\" with icon $icon")
+
+# Check if the user clicked "Yes"
+if [[ $result == *"Yes"* ]]; then
+    exit 0
+else
+    exit 1
+fi 
