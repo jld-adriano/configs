@@ -598,14 +598,14 @@ let
     }
 
     function gotorepo() {
-      local full_path=$(cd ~/monorepos && find . -maxdepth 1 -mindepth 1 -type d | cut -c3- | fzf --preview 'cd ~/monorepos/{} && git status' --preview-window=right:60% --prompt="Select repo: ")
+      local full_path=$(cd ~/monorepos && find . -maxdepth 1 -mindepth 1 -type d | cut -c3- | fzf --preview 'cd ~/monorepos/{} && (echo "=== STATUS ==="; git status; echo "\n=== UNMERGED BRANCHES ==="; git branch --no-merged)' --preview-window=right:60% --prompt="Select repo: ")
       if [[ -n "$full_path" ]]; then
         cd ~/monorepos/"$full_path"
       fi
     }
 
     function gotorepoc() {
-      local full_path=$(cd ~/monorepos && find . -maxdepth 1 -mindepth 1 -type d | cut -c3- | fzf --preview 'cd ~/monorepos/{} && git status' --preview-window=right:60% --prompt="Select repo: ")
+      local full_path=$(cd ~/monorepos && find . -maxdepth 1 -mindepth 1 -type d | cut -c3- | fzf --preview 'cd ~/monorepos/{} && (echo "=== STATUS ==="; git status; echo "\n=== UNMERGED BRANCHES ==="; git branch --no-merged)' --preview-window=right:60% --prompt="Select repo: ")
       if [[ -n "$full_path" ]]; then
         cd ~/monorepos/"$full_path" && cursor .
       fi
