@@ -7,20 +7,6 @@
   "terminal.integrated.env.osx": {
     "FIG_NEW_SESSION": "1"
   },
-  "files.exclude": {
-    "**/.trunk/*out/": true,
-    "**/.trunk/*actions/": true,
-    "**/.trunk/*logs/": true,
-    "**/.trunk/*plugins/": true,
-    "**/.trunk/*notifications/": true
-  },
-  "files.watcherExclude": {
-    "**/.trunk/*out/": true,
-    "**/.trunk/*actions/": true,
-    "**/.trunk/*logs/": true,
-    "**/.trunk/*plugins/": true,
-    "**/.trunk/*notifications/": true
-  },
   "editor.defaultFormatter": "trunk.io",
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
@@ -107,5 +93,26 @@
   "cursor.chat.showSuggestedFiles": true,
   "vscode-neovim.neovimExecutablePaths.darwin": "/Users/jldadriano/.nix-profile/bin/nvim",
   "workbench.iconTheme": "catppuccin-mocha",
-  "hediet.vscode-drawio.resizeImages": null
+  // Prevent slowness
+
+  "search.followSymlinks": false,
+  "files.exclude": {
+    "**/tmp/**": true,
+    "**/node_modules/**": true,
+    "**/.git/objects/**": true
+  },
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/tmp/**": true,
+    "**/dist/**": true
+  },
+  "search.exclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/tmp/**": true,
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true
+  }
 }
