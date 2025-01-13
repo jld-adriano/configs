@@ -608,5 +608,10 @@
   {
     "key": "cmd+r d",
     "command": "-workbench.files.action.compareWithSaved"
+  },
+  {
+    "key": "ctrl+cmd+e",
+    "command": "editor.action.goToReferences",
+    "when": "editorHasReferenceProvider && !inReferenceSearchEditor && !isInEmbeddedEditor"
   }
 ]
