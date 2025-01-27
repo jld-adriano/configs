@@ -24,7 +24,7 @@
       },
       "locked": {
         "lastModified": 1,
-        "narHash": "sha256-yOqGLYfH1nlrBVWuj19ZE+h2T60Xb3+xWYGeqbWaH6s=",
+        "narHash": "sha256-lXH85gVIY/Z8tA0wdLAQAVMWsoFUWieCjuhBUBsyjFo=",
         "path": "../aws-console",
         "type": "path"
       },
@@ -76,11 +76,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1737762889,
-        "narHash": "sha256-5HGG09bh/Yx0JA8wtBMAzt0HMCL1bYZ93x4IqzVExio=",
+        "lastModified": 1737968762,
+        "narHash": "sha256-xiPARGKwocaMtv+U/rgi+h2g56CZZEmrcl7ldRaslq8=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "daf04c5950b676f47a794300657f1d3d14c1a120",
+        "rev": "e1ae908bcc30af792b0bb0a52e53b03d2577255e",
         "type": "github"
       },
       "original": {
@@ -237,11 +237,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1731959036,
-        "narHash": "sha256-+cav1KK+xFUL6Xe22Xfxx+6BPvs6D9VmMNRi+v4knGg=",
+        "lastModified": 1737988979,
+        "narHash": "sha256-nFuzlGu8SbRb96SGcDjYOdYbuo2FqWwKKRH/m4pN6mQ=",
         "owner": "jld-adriano",
         "repo": "run-http",
-        "rev": "f5d8264873a5d23d1e3ec031865a703fa502feba",
+        "rev": "1f6ddad8d4344dc443f91564377107296cbcd196",
         "type": "github"
       },
       "original": {
