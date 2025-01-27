@@ -818,6 +818,7 @@ in {
   home.packages = [
     pkgs.htop
     pkgs.btop
+    pkgs.comma
     pkgs.nerd-fonts.droid-sans-mono
     pkgs.nerd-fonts.fira-code
     pkgs.atuin
