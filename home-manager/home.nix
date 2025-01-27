@@ -817,6 +817,7 @@ in {
 
   home.packages = [
     pkgs.htop
+    pkgs.btop
     pkgs.nerd-fonts.droid-sans-mono
     pkgs.nerd-fonts.fira-code
     pkgs.atuin
