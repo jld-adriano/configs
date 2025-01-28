@@ -97,7 +97,6 @@
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-  "cursor.composer.renderPillsInsteadOfBlocks": true,
   "cursor.composer.collapsePaneInputBoxPills": true,
   "python.analysis.inlayHints.functionReturnTypes": true,
   "python.analysis.inlayHints.pytestParameters": true,
@@ -124,5 +123,8 @@
     "**/.git/objects/**": true,
     "**/.git/subtree-cache/**": true
   },
-  "git.openRepositoryInParentFolders": "always"
+  "git.openRepositoryInParentFolders": "always",
+  "vs-kubernetes": {
+    "vs-kubernetes.minikube-show-information-expiration": "2025-07-19T15:33:29.423Z"
+  }
 }
