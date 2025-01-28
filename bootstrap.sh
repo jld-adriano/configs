@@ -18,6 +18,15 @@ cd ..
 # Home manager setup
 nix run home-manager/release-24.05 -- switch --flake $(dirname $0)/home-manager#home
 
+# Darwin setup (only on macOS)
+if [ "$(uname)" = "Darwin" ]; then
+  echo "Setting up nix-darwin..."
+  cd darwin
+  nix build .#darwinConfigurations.jldadriano.system
+  ./result/sw/bin/darwin-rebuild switch --flake .#jldadriano
+  cd ..
+fi
+
 # TODO: Doesn't have a nix package :(
 if [ ! $(which age-plugin-se) ] && [ $(uname) = "Darwin" ]; then
   brew install age-plugin-se
