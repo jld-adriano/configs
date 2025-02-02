@@ -690,7 +690,7 @@ let
         package_json_files=$(cat $cache_file)
         { chronic $(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//'> $cache_file) } &>/dev/null &
       else
-        package_json_files=$(cd $root && git ls-files --full-name | grep package.json | sed 's/\/package.json$//')
+        package_json_files=$(cd $root && git ls-files --full-name | grep package.json | grep -v node_modules | grep -v \.next/ | sed 's/\/package.json$//')
         echo "$package_json_files" > $cache_file
       fi
       temp_file=$(mktemp)
