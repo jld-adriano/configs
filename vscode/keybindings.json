@@ -613,5 +613,9 @@
     "key": "ctrl+cmd+e",
     "command": "editor.action.goToReferences",
     "when": "editorHasReferenceProvider && !inReferenceSearchEditor && !isInEmbeddedEditor"
+  },
+  {
+    "key": "cmd+i",
+    "command": "composerMode.agent"
   }
 ]
