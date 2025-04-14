@@ -126,5 +126,16 @@
   "git.openRepositoryInParentFolders": "always",
   "vs-kubernetes": {
     "vs-kubernetes.minikube-show-information-expiration": "2025-07-19T15:33:29.423Z"
-  }
+  },
+  "cursor.diffs.useCharacterLevelDiffs": true,
+  "debug.javascript.autoAttachFilter": "onlyWithFlag",
+  "update.releaseTrack": "prerelease",
+  "cursor.composer.shouldChimeAfterChatFinishes": true,
+  "cursor.composer.shouldAllowCustomModes": true,
+  "githubPullRequests.pullBranch": "never",
+  "git.branchProtectionPrompt": "alwaysCommit"
+  // Make sure typescript project work properly
+  // "typescript.preferences.importModuleSpecifier": "relative",
+  // "typescript.tsserver.useSyntaxServer": "always",
+  // "typescript.tsserver.experimental.enableProjectDiagnostics": true
 }
