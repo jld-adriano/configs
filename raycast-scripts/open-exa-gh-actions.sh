@@ -8,4 +8,4 @@
 # Optional parameters:
 # @raycast.icon 🤖
 
-open https://github.com/exa-labs/monorepo/actions
+open https://github.com/exa-labs/monorepo/actions?query=actor%3Ajld-adriano+-event%3Aschedule
