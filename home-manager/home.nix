@@ -78,7 +78,13 @@ let
       else
         branch=$1
       fi
-      git reset && git stash && git switch "$branch" && git stash pop
+      # Check if branch exists
+      if ! git show-ref --verify --quiet refs/heads/"$branch"; then
+        echo "Branch '$branch' does not exist. Creating it."
+        git checkout -b "$branch"
+      else
+        git reset && git stash && git switch "$branch" && git stash pop
+      fi
     }
     function _gswitch_completion() {
       local -a branches
@@ -298,8 +304,10 @@ let
 
     unalias gcp 2>/dev/null
     function gcp() {
-      # Get branch to cherry-pick from
-      local branch=$(git for-each-ref --sort='-creatordate' refs/heads/ --format='%(refname:short)' | fzf --preview 'git log -n 10 --oneline {}')
+      # Get current branch
+      local current_branch=$(git branch --show-current)
+      # Get branch to cherry-pick from, excluding current branch
+      local branch=$(git for-each-ref --sort='-creatordate' refs/heads/ --format='%(refname:short)' | grep -v "^$current_branch$" | fzf --preview 'git log -n 10 --oneline {}')
       if [[ -z "$branch" ]]; then
         echo "No branch selected"
         return 1
