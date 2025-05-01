@@ -23,15 +23,14 @@
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
-        "lastModified": 1,
-        "narHash": "sha256-lXH85gVIY/Z8tA0wdLAQAVMWsoFUWieCjuhBUBsyjFo=",
         "path": "../aws-console",
         "type": "path"
       },
       "original": {
         "path": "../aws-console",
         "type": "path"
-      }
+      },
+      "parent": []
     },
     "flake-utils": {
       "inputs": {
