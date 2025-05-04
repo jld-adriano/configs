@@ -68,7 +68,8 @@ let
     function gswitch() {
       local branch
       if [ $# -eq 0 ]; then
-        selected_branch=$(git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' | fzf --preview 'git log -n 10 --oneline {}')
+        local current_branch=$(git branch --show-current)
+        selected_branch=$(git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' | grep -v "^$current_branch$" | fzf --preview 'git log -n 10 --oneline {}')
         if [ -n "$selected_branch" ]; then
           branch=$selected_branch
         else
