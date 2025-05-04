@@ -878,6 +878,7 @@ in {
     pkgs.lazygit
     pkgs.llm
     pkgs.git-filter-repo
+    pkgs.kubetail
     pkgs.devbox
     # for exa stuff
     pkgs.protobuf
