@@ -863,7 +863,7 @@ in {
     pkgs.dive
     pkgs.aws-console
     pkgs.age-env
-    pkgs.run-http
+    # pkgs.run-http
     pkgs.magic-wormhole-rs
     pkgs.slack-cli
     pkgs.bat
