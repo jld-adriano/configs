@@ -417,8 +417,7 @@ let
     function apple-notify() {
       TITLE=$1
       BODY=$2
-      SOUND=${"3:-" "default"}
-      osascript -e "display notification \"$2\" with title \"$1\" sound name \"$3\"" 
+      osascript -e "display notification \"$BODY\" with title \"$TITLE\""
     }
 
     function create-sh-script() {
