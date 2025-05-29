@@ -705,6 +705,15 @@ let
         package_json_files=$(cd $root && git ls-files --full-name | grep package.json | grep -v node_modules | grep -v /\.next | sed 's/\/package.json$//')
         echo "$package_json_files" > $cache_file
       fi
+      # If argument matches a final dirname exactly, go directly there
+      if [[ -n "$1" ]]; then
+        for pkg in $package_json_files; do
+          if [[ "$(basename \"$pkg\")" == "$1" ]]; then
+            cd "$root/$pkg"
+            return 0
+          fi
+        done
+      fi
       temp_file=$(mktemp)
       echo "$package_json_files" | fzf -q "$1" --select-1 --exit-0 | tee "$temp_file"
       selected=$(cat "$temp_file")
