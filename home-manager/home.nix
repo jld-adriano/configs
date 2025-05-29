@@ -891,6 +891,7 @@ in {
     # for exa stuff
     pkgs.protobuf
     pkgs.pnpm
+    pkgs.clickhouse
     pkgs.nodejs
     gitScripts
   ];
