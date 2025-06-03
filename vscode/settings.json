@@ -131,9 +131,10 @@
   "debug.javascript.autoAttachFilter": "onlyWithFlag",
   "update.releaseTrack": "prerelease",
   "cursor.composer.shouldChimeAfterChatFinishes": true,
-  "cursor.composer.shouldAllowCustomModes": true,
   "githubPullRequests.pullBranch": "never",
-  "git.branchProtectionPrompt": "alwaysCommit"
+  "git.branchProtectionPrompt": "alwaysCommit",
+  "cursor.terminal.usePreviewBox": true,
+  "cursor.cpp.enablePartialAccepts": true
   // Make sure typescript project work properly
   // "typescript.preferences.importModuleSpecifier": "relative",
   // "typescript.tsserver.useSyntaxServer": "always",

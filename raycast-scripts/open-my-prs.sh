@@ -2,11 +2,11 @@
 
 # Required parameters:
 # @raycast.schemaVersion 1
-# @raycast.title open exa metrics
+# @raycast.title open my prs
 # @raycast.mode compact
 
 # Optional parameters:
 # @raycast.icon :cloud:
 
 
-open https://grafana-prometheus.exa.ai/d/main/vulcan?orgId=1
+open https://github.com/exa-labs/monorepo/pulls?q=sort%3Aupdated+is%3Apr+author%3Ajld-adriano+
