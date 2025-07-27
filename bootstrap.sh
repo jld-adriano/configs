@@ -1,9 +1,9 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 set -eo pipefail
 
 # Nix base setup
-if [ ! -f /etc/nix/nix.conf ] && [ ! $(which nix) ]; then
+if [ ! -f /etc/nix/nix.conf ] && ! command -v nix >/dev/null 2>&1; then
   sh <(curl -L https://nixos.org/nix/install)
 fi
 
