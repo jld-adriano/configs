@@ -1,4 +1,4 @@
-{ config, pkgs, shellConfig, ... }:
+{ config, pkgs, shellConfig, lib, username ? "joaoadriano", homeDirectory ? "/Users/joaoadriano", ... }:
 let
   gitAliases = ''
     #!/usr/bin/env zsh
@@ -417,7 +417,6 @@ let
     function apple-notify() {
       TITLE=$1
       BODY=$2
-      SOUND=${"3:-" "default"}
       osascript -e "display notification \"$2\" with title \"$1\" sound name \"$3\"" 
     }
 
@@ -824,8 +823,8 @@ let
   };
 
 in {
-  home.username = "jldadriano";
-  home.homeDirectory = "/Users/jldadriano";
+  home.username = username;
+  home.homeDirectory = homeDirectory;
   home.stateVersion = "24.05";
 
   home.packages = [
@@ -863,7 +862,6 @@ in {
     pkgs.dive
     pkgs.aws-console
     pkgs.age-env
-    pkgs.run-http
     pkgs.magic-wormhole-rs
     pkgs.slack-cli
     pkgs.bat

@@ -22,8 +22,8 @@ nix run home-manager/release-24.05 -- switch --flake $(dirname $0)/home-manager#
 if [ "$(uname)" = "Darwin" ]; then
   echo "Setting up nix-darwin..."
   cd darwin
-  nix build .#darwinConfigurations.jldadriano.system
-  ./result/sw/bin/darwin-rebuild switch --flake .#jldadriano
+  nix build .#darwinConfigurations.joaoadriano.system
+  ./result/sw/bin/darwin-rebuild switch --flake .#joaoadriano
   cd ..
 fi
 

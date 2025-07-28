@@ -1,5 +1,5 @@
 {
-  description = "Home Manager configuration of jldadriano";
+  description = "Home Manager configuration of joaoadriano";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -39,7 +39,11 @@
 
         # Optionally use extraSpecialArgs
         # to pass through arguments to home.nix
-        extraSpecialArgs = { inherit aws-console; };
+        extraSpecialArgs = { 
+          inherit aws-console; 
+          username = "joaoadriano";
+          homeDirectory = "/Users/joaoadriano";
+        };
       };
     };
 }
