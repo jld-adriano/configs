@@ -27,14 +27,15 @@ if [ "$(uname)" = "Darwin" ]; then
   cd ..
 fi
 
-# TODO: Doesn't have a nix package :(
-if [ ! $(which age-plugin-se) ] && [ $(uname) = "Darwin" ]; then
-  brew install age-plugin-se
-fi
-
 # VSCode setup
 mkdir -p ~/Library/Application\ Support/Code/User
 # Link vscode settings to appropriate directories
 # If you use cursor, change Code to Cursor
 ln -s $(pwd)/vscode/settings.json ~/Library/Application\ Support/Code/User/settings.json
 ln -s $(pwd)/vscode/keybindings.json ~/Library/Application\ Support/Code/User/keybindings.json
+
+if [ -d ~/Library/Application\ Support/Cursor ]; then 
+  # Cursor setup
+  ln -s $(pwd)/vscode/keybindings.json ~/Library/Application\ Support/Cursor/User/keybindings.json
+  ln -s $(pwd)/vscode/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
+fi
