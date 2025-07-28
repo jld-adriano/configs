@@ -894,7 +894,9 @@ in {
       + navigationTools + awsTools + exaSpecificAliases + completions;
 
     shellAliases = {
-      "reload-home-manager" =
+      "reload-home-manager" = if pkgs.stdenv.isDarwin then
+        "zsh -c 'cd ~/projs/configs/darwin && nix build .#darwinConfigurations.${username}.system && ./result/sw/bin/darwin-rebuild switch --flake .#${username} && cd ~/projs/configs/home-manager && nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home --extra-experimental-features nix-command --extra-experimental-features flakes' && zsh"
+      else
         "zsh -c 'cd ~/projs/configs/home-manager && nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home --extra-experimental-features nix-command --extra-experimental-features flakes' && zsh";
       "ba" = "bun add";
       "bad" = "bun add --dev";
