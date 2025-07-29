@@ -866,6 +866,7 @@ in {
     pkgs.slack-cli
     pkgs.bat
     pkgs.s5cmd
+    pkgs._1password-cli
     # pkgs.zed-editor
     pkgs.ncdu
     pkgs.sq
@@ -895,9 +896,41 @@ in {
 
     shellAliases = {
       "reload-home-manager" = if pkgs.stdenv.isDarwin then
-        "zsh -c 'cd ~/projs/configs/darwin && nix build .#darwinConfigurations.${username}.system && ./result/sw/bin/darwin-rebuild switch --flake .#${username} && cd ~/projs/configs/home-manager && nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home --extra-experimental-features nix-command --extra-experimental-features flakes' && zsh"
+        ''zsh -c 'echo "🔨 Rebuilding Darwin configuration..." && \
+          cd ~/projs/configs/darwin && \
+          nix build .#darwinConfigurations.${username}.system && \
+          echo "🔐 Applying Darwin configuration (may require password)..." && \
+          sudo ./result/sw/bin/darwin-rebuild switch --flake .#${username} && \
+          echo "✅ Darwin configuration applied!" && \
+          echo "🏠 Rebuilding Home Manager configuration..." && \
+          cd ~/projs/configs/home-manager && \
+          nix run home-manager/release-24.05 -- switch --flake .#home && \
+          echo "✅ Home Manager configuration applied!" && \
+          echo "🎉 All configurations reloaded successfully!"' && zsh''
       else
-        "zsh -c 'cd ~/projs/configs/home-manager && nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-24.05 -- switch --flake ~/projs/configs/home-manager#home --extra-experimental-features nix-command --extra-experimental-features flakes' && zsh";
+        ''zsh -c 'echo "🏠 Rebuilding Home Manager configuration..." && \
+          cd ~/projs/configs/home-manager && \
+          nix run home-manager/release-24.05 -- switch --flake .#home && \
+          echo "✅ Home Manager configuration applied!"' && zsh'';
+      
+      # Additional Nix management aliases
+      "reload-darwin" = if pkgs.stdenv.isDarwin then
+        ''zsh -c 'echo "🔨 Rebuilding Darwin configuration only..." && \
+          cd ~/projs/configs/darwin && \
+          nix build .#darwinConfigurations.${username}.system && \
+          echo "🔐 Applying Darwin configuration (may require password)..." && \
+          sudo ./result/sw/bin/darwin-rebuild switch --flake .#${username} && \
+          echo "✅ Darwin configuration applied!"' ''
+      else
+        "echo 'Darwin rebuild is only available on macOS'";
+      
+      "reload-hm" = ''zsh -c 'echo "🏠 Rebuilding Home Manager configuration only..." && \
+        cd ~/projs/configs/home-manager && \
+        nix run home-manager/release-24.05 -- switch --flake .#home && \
+        echo "✅ Home Manager configuration applied!"' '';
+      
+      "nix-clean" = "nix-collect-garbage -d && echo '✅ Nix garbage collected!'";
+      
       "ba" = "bun add";
       "bad" = "bun add --dev";
       "bw" = "bun run --watch";

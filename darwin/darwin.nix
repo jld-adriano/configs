@@ -1,7 +1,31 @@
 { config, pkgs, ... }: {
   # Basic configuration
-  services.nix-daemon.enable = true;
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  
+  # Set primary user for user-specific settings
+  system.primaryUser = "joaoadriano";
+  
+  # Fix nixbld group ID for existing Nix installation
+  ids.gids.nixbld = 350;
+
+  # Homebrew configuration
+  homebrew = {
+    enable = true;
+    onActivation = {
+      autoUpdate = true;
+      upgrade = true;
+      cleanup = "zap";
+    };
+    brews = [
+      "age-plugin-se"
+    ];
+    casks = [
+      # Add any cask applications here later
+    ];
+    taps = [
+      # Add any custom taps here later
+    ];
+  };
 
   # System-wide packages
   environment.systemPackages = with pkgs; [
@@ -73,16 +97,17 @@
 
   # Fonts
   fonts = {
-    fontDir.enable = true;
-    fonts = with pkgs;
-      [ (nerdfonts.override { fonts = [ "FiraCode" "DroidSansMono" ]; }) ];
+    packages = with pkgs; [
+      nerd-fonts.fira-code
+      nerd-fonts.droid-sans-mono
+    ];
   };
 
   # macOS-specific services
   services = {
     # Yabai window manager
     yabai = {
-      enable = true;
+      enable = false;
       package = pkgs.yabai;
       enableScriptingAddition = true;
       config = {
@@ -102,7 +127,7 @@
 
     # skhd - hotkey daemon
     skhd = {
-      enable = true;
+      enable = false;
       package = pkgs.skhd;
       skhdConfig = ''
         # Navigation
@@ -135,5 +160,5 @@
   };
 
   # System security
-  security.pam.enableSudoTouchIdAuth = true;
+  security.pam.services.sudo_local.touchIdAuth = true;
 }

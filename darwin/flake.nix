@@ -7,48 +7,39 @@
       url = "github:lnl7/nix-darwin";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    home-manager = {
-      url = "github:nix-community/home-manager";
+    nix-homebrew = {
+      url = "github:zhaofengli/nix-homebrew";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, darwin, nixpkgs, home-manager }: {
+  outputs = { self, darwin, nixpkgs, nix-homebrew }: {
 
     darwinConfigurations."jldadriano" = darwin.lib.darwinSystem {
       system = "aarch64-darwin";
-      modules = [
+      modules = [ 
         ./darwin.nix
-        home-manager.darwinModules.home-manager
+        nix-homebrew.darwinModules.nix-homebrew
         {
-          home-manager.useGlobalPkgs = true;
-          home-manager.useUserPackages = true;
-          home-manager.users.jldadriano = import ../home-manager/home.nix {
-            inherit (nixpkgs) lib;
-            inherit (nixpkgs.legacyPackages.aarch64-darwin) pkgs;
-            username = "jldadriano";
-            homeDirectory = "/Users/jldadriano";
-            shellConfig = {};
-            config = {};
+          nix-homebrew = {
+            enable = true;
+            user = "jldadriano";
+            autoMigrate = true;
           };
         }
       ];
     };
+    
     darwinConfigurations."joaoadriano" = darwin.lib.darwinSystem {
       system = "aarch64-darwin";
-      modules = [
+      modules = [ 
         ./darwin.nix
-        home-manager.darwinModules.home-manager
+        nix-homebrew.darwinModules.nix-homebrew
         {
-          home-manager.useGlobalPkgs = true;
-          home-manager.useUserPackages = true;
-          home-manager.users.joaoadriano = import ../home-manager/home.nix {
-            inherit (nixpkgs) lib;
-            inherit (nixpkgs.legacyPackages.aarch64-darwin) pkgs;
-            username = "joaoadriano";
-            homeDirectory = "/Users/joaoadriano";
-            shellConfig = {};
-            config = {};
+          nix-homebrew = {
+            enable = true;
+            user = "joaoadriano";
+            autoMigrate = true;
           };
         }
       ];
