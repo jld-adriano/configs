@@ -635,7 +635,12 @@ let
     function rwe() {
       age-env run-with-env ''${1} -- ''${@:2}
     }
-    alias gh="rwe gh gh"
+    unalias gh 2>/dev/null
+    old_gh_path=$(which gh)
+    function gh() {
+      GITHUB_TOKEN=$(op read --account LPT7NTDHIBH7LDW22N5EUHQYP4 op://Personal/GITHUB_TOKEN/credential)
+      GITHUB_TOKEN=$GITHUB_TOKEN $old_gh_path $@
+    }
     function rwes() {
       age-env run-with-env ''${1} -- zsh
     }
