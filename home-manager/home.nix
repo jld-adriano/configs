@@ -4,7 +4,7 @@ let
     #!/usr/bin/env zsh
 
     alias gcane="git commit --amend --no-edit"
-    alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit | less -R"
+    alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit | head -n 400 | less -R"
 
     function subinit() {
       git submodule update --init --recursive
