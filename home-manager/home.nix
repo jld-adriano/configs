@@ -839,6 +839,7 @@ in {
     pkgs.nerd-fonts.droid-sans-mono
     pkgs.nerd-fonts.fira-code
     pkgs.atuin
+    pkgs.claude-code
     pkgs.pv
     pkgs.terminal-notifier
     pkgs.zsh
@@ -993,6 +994,11 @@ in {
   # };
 
   home.sessionVariables = { REDITOR = "nvim"; };
+  
+  # Add directories to PATH
+  home.sessionPath = [
+    "$HOME/.local/bin"
+  ];
 
   launchd.agents.home-manager-daemon = bunDaemonAgent "home-manager-daemon"
     "${config.home.homeDirectory}/projs/configs/nix-home-manager-daemon/";
