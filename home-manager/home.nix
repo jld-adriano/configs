@@ -436,6 +436,7 @@ let
 
   zshrc = ''
     export EDITOR="nvim"
+    export PATH="$HOME/.local/bin:$PATH"
 
     # Oh My Zsh config
     ZSH_THEME="robbyrussell"
@@ -942,6 +943,8 @@ in {
       "bw" = "bun run --watch";
       "br" = "bun remove";
       "bi" = "bun install";
+      "s3l" = "aws s3 ls";
+      "s3la" = "aws s3 ls --recursive";
     };
     oh-my-zsh = { enable = true; };
   };
@@ -992,13 +995,8 @@ in {
   #   ".config/atuin/config.toml".text =
   #     builtins.readFile "${configsDir}/atuin-config.toml";
   # };
-
+  home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
   home.sessionVariables = { REDITOR = "nvim"; };
-  
-  # Add directories to PATH
-  home.sessionPath = [
-    "$HOME/.local/bin"
-  ];
 
   launchd.agents.home-manager-daemon = bunDaemonAgent "home-manager-daemon"
     "${config.home.homeDirectory}/projs/configs/nix-home-manager-daemon/";
