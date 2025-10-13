@@ -874,6 +874,7 @@ in {
     pkgs.bat
     pkgs.s5cmd
     pkgs._1password-cli
+    pkgs.graphite-cli
     # pkgs.zed-editor
     pkgs.ncdu
     pkgs.sq
