@@ -875,6 +875,7 @@ in {
     pkgs.s5cmd
     pkgs._1password-cli
     pkgs.graphite-cli
+    pkgs.clickhouse-cli
     # pkgs.zed-editor
     pkgs.ncdu
     pkgs.sq
