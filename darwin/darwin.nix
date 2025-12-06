@@ -21,14 +21,15 @@
   #   Virtual Desktop 3: workspace 7 (mon1) + workspace 8 (mon2) + workspace 9 (mon3)
   #
   # Keybindings:
-  #   alt-1/2/3     - Switch all monitors to Virtual Desktop 1/2/3
-  #   alt-h/j/k/l   - Focus window left/down/up/right (vim-style)
+  #   alt-1/2/3       - Switch all monitors to Virtual Desktop 1/2/3
+  #   alt-shift-1-9   - Move window to workspace 1-9 (see grid above)
+  #   alt-h/j/k/l     - Focus window left/down/up/right (vim-style)
   #   alt-shift-h/j/k/l - Move window left/down/up/right
-  #   alt-f         - Toggle fullscreen
-  #   alt-shift-f   - Flatten workspace tree (reset layout)
-  #   alt-b         - Balance window sizes
-  #   alt-period    - Focus next monitor
-  #   alt-comma     - Focus previous monitor
+  #   alt-f           - Toggle fullscreen
+  #   alt-shift-f     - Flatten workspace tree (reset layout to tiles)
+  #   alt-b           - Balance window sizes
+  #   alt-period      - Focus next monitor
+  #   alt-comma       - Focus previous monitor
   #
   # =============================================================================
 
@@ -185,10 +186,19 @@
             "focus-monitor 1"
           ];
           
-          # Move window to workspace (on current monitor)
+          # Move window to workspace
+          # VD1: 1=mon1, 2=mon2, 3=mon3
+          # VD2: 4=mon1, 5=mon2, 6=mon3
+          # VD3: 7=mon1, 8=mon2, 9=mon3
           "alt-shift-1" = "move-node-to-workspace 1";
-          "alt-shift-2" = "move-node-to-workspace 4";
-          "alt-shift-3" = "move-node-to-workspace 7";
+          "alt-shift-2" = "move-node-to-workspace 2";
+          "alt-shift-3" = "move-node-to-workspace 3";
+          "alt-shift-4" = "move-node-to-workspace 4";
+          "alt-shift-5" = "move-node-to-workspace 5";
+          "alt-shift-6" = "move-node-to-workspace 6";
+          "alt-shift-7" = "move-node-to-workspace 7";
+          "alt-shift-8" = "move-node-to-workspace 8";
+          "alt-shift-9" = "move-node-to-workspace 9";
           
           # Switch focus between monitors
           "alt-period" = "focus-monitor next";
