@@ -153,10 +153,10 @@
         on-focused-monitor-changed = [ "move-mouse monitor-lazy-center" ];
         mode.main.binding = {
           # Vim-style navigation between windows
-          "alt-h" = "focus left";
-          "alt-j" = "focus down";
-          "alt-k" = "focus up";
-          "alt-l" = "focus right";
+          "alt-h" = "focus --boundaries-action wrap-around-the-workspace left";
+          "alt-j" = "focus --boundaries-action wrap-around-the-workspace down";
+          "alt-k" = "focus --boundaries-action wrap-around-the-workspace up";
+          "alt-l" = "focus --boundaries-action wrap-around-the-workspace right";
           
           # Move windows
           "alt-shift-h" = "move left";
