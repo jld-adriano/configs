@@ -30,6 +30,7 @@
   #   alt-b           - Balance window sizes
   #   alt-period      - Focus next monitor
   #   alt-comma       - Focus previous monitor
+  #   alt-?           - Show this help
   #
   # =============================================================================
 
@@ -52,12 +53,14 @@
     };
     brews = [
       "age-plugin-se"
+      "FelixKratz/formulae/borders"  # Window border highlighting
     ];
     casks = [
       "nikitabobko/tap/aerospace"
     ];
     taps = [
       "nikitabobko/tap"
+      "FelixKratz/formulae"
     ];
   };
 
@@ -143,13 +146,17 @@
     aerospace = {
       enable = true;
       settings = {
+        # Start borders for focused window highlighting
+        after-startup-command = [
+          "exec-and-forget borders active_color=0xffff3333 inactive_color=0x00000000 width=8.0"
+        ];
         on-focused-monitor-changed = [ "move-mouse monitor-lazy-center" ];
         mode.main.binding = {
           # Vim-style navigation between windows
-          "alt-h" = "focus --boundaries-action wrap-around-the-workspace left";
-          "alt-j" = "focus --boundaries-action wrap-around-the-workspace down";
-          "alt-k" = "focus --boundaries-action wrap-around-the-workspace up";
-          "alt-l" = "focus --boundaries-action wrap-around-the-workspace right";
+          "alt-h" = "focus left";
+          "alt-j" = "focus down";
+          "alt-k" = "focus up";
+          "alt-l" = "focus right";
           
           # Move windows
           "alt-shift-h" = "move left";
@@ -203,6 +210,9 @@
           # Switch focus between monitors
           "alt-period" = "focus-monitor next";
           "alt-comma" = "focus-monitor prev";
+          
+          # Help
+          "alt-shift-slash" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-help";
         };
         # Pin workspaces to monitors
         # Monitor 1: ED340CU S3, Monitor 2: Built-in Retina Display, Monitor 3: DELL S3422DW

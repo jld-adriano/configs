@@ -1,0 +1,278 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
+import argparse
+import subprocess
+import time
+
+DEVICE_IP = "192.168.1.212"
+INTERFACE = "en0"
+PING_TIMEOUT = 3  # seconds before restarting interface
+ADB_TIMEOUT = 5  # seconds for adb commands
+
+
+def run(cmd: str, check: bool = True) -> subprocess.CompletedProcess:
+    print(f"$ {cmd}")
+    return subprocess.run(cmd, shell=True, check=check)
+
+
+def ping_once() -> bool:
+    result = subprocess.run(
+        f"ping -c1 -W1 {DEVICE_IP}",
+        shell=True,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def restart_interface():
+    print(f"🔄 Restarting {INTERFACE}...")
+    run(f"sudo ifconfig {INTERFACE} down")
+    run(f"sudo ifconfig {INTERFACE} up")
+    time.sleep(0.5)
+
+
+def ensure_ping() -> bool:
+    """Ensure ping works, restarting interface if needed. Returns True when ping succeeds."""
+    # First check if ping already works
+    if ping_once():
+        return True
+
+    print(f"📡 Ping to {DEVICE_IP} failed, recovering...")
+
+    while True:
+        restart_interface()
+        start = time.time()
+        while time.time() - start < PING_TIMEOUT:
+            if ping_once():
+                print(f"✅ Ping to {DEVICE_IP} successful!")
+                return True
+            print(f"⏳ Waiting for {DEVICE_IP}...")
+            time.sleep(0.5)
+        print(f"⏱️  Ping failed for {PING_TIMEOUT}s, restarting interface...")
+
+
+def get_device_status() -> str | None:
+    """Get device status from adb devices output. Returns 'device', 'offline', or None."""
+    try:
+        result = subprocess.run(
+            "adb devices",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=ADB_TIMEOUT,
+        )
+        for line in result.stdout.splitlines():
+            if DEVICE_IP in line:
+                if "offline" in line:
+                    return "offline"
+                if "device" in line:
+                    return "device"
+    except subprocess.TimeoutExpired:
+        print("⏱️  adb devices timed out")
+    return None
+
+
+def restart_adb_server():
+    """Kill and restart adb server."""
+    print("🔄 Restarting adb server...")
+    try:
+        subprocess.run(
+            "adb kill-server", shell=True, capture_output=True, timeout=ADB_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        pass
+    time.sleep(0.5)
+    try:
+        subprocess.run(
+            "adb start-server", shell=True, capture_output=True, timeout=ADB_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def force_reconnect():
+    """Disconnect and reconnect to device. Restarts adb server if connect fails."""
+    print(f"🔌 Force reconnecting to {DEVICE_IP}...")
+    try:
+        subprocess.run(
+            f"adb disconnect {DEVICE_IP}:5555",
+            shell=True,
+            capture_output=True,
+            timeout=ADB_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        print("⏱️  adb disconnect timed out")
+        restart_adb_server()
+        return
+
+    time.sleep(0.5)
+    try:
+        result = subprocess.run(
+            f"adb connect {DEVICE_IP}:5555",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=ADB_TIMEOUT,
+        )
+        if "failed" in result.stdout.lower() or "cannot" in result.stdout.lower():
+            print(f"❌ Connect failed: {result.stdout.strip()}")
+            restart_adb_server()
+    except subprocess.TimeoutExpired:
+        print("⏱️  adb connect timed out")
+        restart_adb_server()
+
+
+def ensure_device_online(max_retries: int = 10, delay: float = 1.0) -> bool:
+    """Ensure device is online, reconnecting if needed."""
+    status = get_device_status()
+    if status == "device":
+        return True
+
+    print(f"📱 Device not online (status: {status or 'not found'}), recovering...")
+
+    for attempt in range(max_retries):
+        force_reconnect()
+        time.sleep(delay)
+        status = get_device_status()
+        if status == "device":
+            print(f"✅ Device {DEVICE_IP} is online!")
+            return True
+        print(
+            f"⚠️  Device {status or 'not found'}, retrying ({attempt + 1}/{max_retries})..."
+        )
+
+    return False
+
+
+def ensure_ready() -> bool:
+    """Ensure both ping and adb connection are working."""
+    ensure_ping()
+
+    # Try to connect if not connected
+    status = get_device_status()
+    if status is None:
+        print(f"$ adb connect {DEVICE_IP}:5555")
+        subprocess.run(
+            f"adb connect {DEVICE_IP}:5555",
+            shell=True,
+            capture_output=True,
+            timeout=ADB_TIMEOUT,
+        )
+
+    return ensure_device_online()
+
+
+def run_adb_with_retry(
+    cmd: str, max_retries: int = 5, delay: float = 1.0, timeout: int = 10
+) -> subprocess.CompletedProcess:
+    """Run adb command with retry on 'device offline' errors."""
+    for attempt in range(max_retries):
+        print(f"$ {cmd}")
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            print(f"⏱️  Command timed out, retrying ({attempt + 1}/{max_retries})...")
+            time.sleep(delay)
+            continue
+
+        if result.returncode == 0:
+            if result.stdout:
+                print(result.stdout, end="")
+            return result
+
+        if "device offline" in result.stderr or "device offline" in result.stdout:
+            print("⚠️  Device offline, forcing reconnection...")
+            if ensure_ready():
+                continue
+            raise Exception("Device failed to come online")
+
+        # Other error, print and raise
+        if result.stderr:
+            print(result.stderr, end="")
+        if result.stdout:
+            print(result.stdout, end="")
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+
+    raise Exception(f"Command failed after {max_retries} retries: {cmd}")
+
+
+def interactive_mode():
+    """Interactive shell for running adb commands."""
+    print("🎮 Interactive ADB shell. Type 'exit' or Ctrl+D to quit.")
+    print(
+        "   Commands are automatically prefixed with 'adb shell ' unless they start with 'adb'.\n"
+    )
+
+    while True:
+        try:
+            cmd = input("adb> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n👋 Bye!")
+            break
+
+        if not cmd:
+            continue
+        if cmd == "exit":
+            print("👋 Bye!")
+            break
+
+        # Ensure connection is ready before each command
+        if not ensure_ready():
+            print("❌ Failed to get device online")
+            continue
+
+        # Auto-prefix with 'adb shell ' if needed
+        if not cmd.startswith("adb"):
+            cmd = f"adb shell {cmd}"
+
+        try:
+            run_adb_with_retry(cmd)
+        except Exception as e:
+            print(f"❌ {e}")
+
+
+DEFAULT_CMD = "adb shell monkey -p com.amazon.cloud9 1"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Connect to Android device over ADB")
+    parser.add_argument(
+        "--reboot", action="store_true", help="Kill and restart adb server"
+    )
+    parser.add_argument(
+        "-i", "--interactive", action="store_true", help="Interactive mode"
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=DEFAULT_CMD,
+        help="ADB command to run (default: open Silk Browser)",
+    )
+    args = parser.parse_args()
+
+    if args.reboot:
+        run("adb kill-server", check=False)
+        run("adb start-server")
+
+    # Ensure connection is ready
+    if not ensure_ready():
+        print("❌ Failed to get device online")
+        return
+
+    run("adb devices")
+
+    if args.interactive:
+        interactive_mode()
+    else:
+        run_adb_with_retry(args.command)
+        print("\n🎉 Done!")
+
+
+if __name__ == "__main__":
+    main()

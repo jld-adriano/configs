@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+# AeroSpace Keybindings Help
+# Displays all configured keybindings in a notification
+
+osascript -e 'display dialog "
+═══════════════════════════════════════
+       AEROSPACE KEYBINDINGS
+═══════════════════════════════════════
+
+VIRTUAL DESKTOPS (all monitors switch)
+  alt-1          → Virtual Desktop 1
+  alt-2          → Virtual Desktop 2
+  alt-3          → Virtual Desktop 3
+
+MOVE WINDOW TO WORKSPACE
+  alt-shift-1-9  → Move to workspace 1-9
+  (1-3=VD1, 4-6=VD2, 7-9=VD3)
+
+WINDOW NAVIGATION (vim-style)
+  alt-h          → Focus left
+  alt-j          → Focus down
+  alt-k          → Focus up
+  alt-l          → Focus right
+
+MOVE WINDOWS
+  alt-shift-h    → Move left
+  alt-shift-j    → Move down
+  alt-shift-k    → Move up
+  alt-shift-l    → Move right
+
+LAYOUT
+  alt-f          → Toggle fullscreen
+  alt-shift-f    → Reset layout (tiles)
+  alt-b          → Balance sizes
+
+MONITORS
+  alt-.          → Focus next monitor
+  alt-,          → Focus prev monitor
+
+" with title "AeroSpace Help" buttons {"OK"} default button "OK"'
+
