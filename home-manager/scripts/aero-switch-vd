@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+# Switch virtual desktop based on number of monitors
+# Usage: aero-switch-vd <vd_number>
+
+VD=$1
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+
+if [ "$MONITOR_COUNT" -eq 2 ]; then
+    # 2 monitors: VD1=1,2  VD2=3,4  VD3=5,6  VD4=7,8
+    case $VD in
+        1) W1=1; W2=2 ;;
+        2) W1=3; W2=4 ;;
+        3) W1=5; W2=6 ;;
+        4) W1=7; W2=8 ;;
+    esac
+    aerospace focus-monitor 1
+    aerospace summon-workspace $W1
+    aerospace focus-monitor 2
+    aerospace summon-workspace $W2
+    aerospace focus-monitor 1
+elif [ "$MONITOR_COUNT" -eq 3 ]; then
+    # 3 monitors: VD1=1,2,3  VD2=4,5,6  VD3=7,8,9  VD4=10,11,12
+    case $VD in
+        1) W1=1; W2=2; W3=3 ;;
+        2) W1=4; W2=5; W3=6 ;;
+        3) W1=7; W2=8; W3=9 ;;
+        4) W1=10; W2=11; W3=12 ;;
+    esac
+    aerospace focus-monitor 1
+    aerospace summon-workspace $W1
+    aerospace focus-monitor 2
+    aerospace summon-workspace $W2
+    aerospace focus-monitor 3
+    aerospace summon-workspace $W3
+    aerospace focus-monitor 1
+else
+    # Single monitor: just switch workspace
+    case $VD in
+        1) aerospace workspace 1 ;;
+        2) aerospace workspace 2 ;;
+        3) aerospace workspace 3 ;;
+        4) aerospace workspace 4 ;;
+    esac
+fi
+

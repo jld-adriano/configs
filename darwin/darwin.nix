@@ -6,19 +6,18 @@
   # AEROSPACE WINDOW MANAGER SETUP
   # ------------------------------
   # This config uses AeroSpace as a tiling window manager with a "virtual desktop"
-  # system that spans all 3 monitors simultaneously.
+  # system that spans all monitors simultaneously. Adapts to 2 or 3 monitors.
   #
   # Monitors:
   #   1. ED340CU S3 (external)
   #   2. Built-in Retina Display (laptop)
   #   3. DELL S3422DW (external)
   #
-  # Virtual Desktops:
-  #   Each "virtual desktop" consists of 3 workspaces (one per monitor):
+  # Virtual Desktops (3 monitors):
+  #   VD1: 1,2,3  |  VD2: 4,5,6  |  VD3: 7,8,9  |  VD4: 10,11,12
   #
-  #   Virtual Desktop 1: workspace 1 (mon1) + workspace 2 (mon2) + workspace 3 (mon3)
-  #   Virtual Desktop 2: workspace 4 (mon1) + workspace 5 (mon2) + workspace 6 (mon3)
-  #   Virtual Desktop 3: workspace 7 (mon1) + workspace 8 (mon2) + workspace 9 (mon3)
+  # Virtual Desktops (2 monitors):
+  #   VD1: 1,2    |  VD2: 3,4    |  VD3: 5,6    |  VD4: 7,8
   #
   # Keybindings:
   #   alt-1/2/3       - Switch all monitors to Virtual Desktop 1/2/3
@@ -171,27 +170,13 @@
           "alt-shift-f" = ["flatten-workspace-tree" "layout tiles" "balance-sizes"];
           "alt-b" = "balance-sizes";
           
-          # Virtual Desktop 1: workspaces 1,2,3 across monitors 1,2,3
-          # Virtual Desktop 2: workspaces 4,5,6 across monitors 1,2,3
-          # Virtual Desktop 3: workspaces 7,8,9 across monitors 1,2,3
-          "alt-1" = [
-            "summon-workspace 1"
-            "focus-monitor 2" "summon-workspace 2"
-            "focus-monitor 3" "summon-workspace 3"
-            "focus-monitor 1"
-          ];
-          "alt-2" = [
-            "summon-workspace 4"
-            "focus-monitor 2" "summon-workspace 5"
-            "focus-monitor 3" "summon-workspace 6"
-            "focus-monitor 1"
-          ];
-          "alt-3" = [
-            "summon-workspace 7"
-            "focus-monitor 2" "summon-workspace 8"
-            "focus-monitor 3" "summon-workspace 9"
-            "focus-monitor 1"
-          ];
+          # Virtual Desktops - adapts to 2 or 3 monitors
+          # 3 monitors: VD1=1,2,3  VD2=4,5,6  VD3=7,8,9  VD4=10,11,12
+          # 2 monitors: VD1=1,2    VD2=3,4    VD3=5,6    VD4=7,8
+          "alt-1" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 1";
+          "alt-2" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 2";
+          "alt-3" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 3";
+          "alt-4" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 4";
           
           # Move window to workspace
           # VD1: 1=mon1, 2=mon2, 3=mon3
@@ -214,19 +199,7 @@
           # Help
           "alt-shift-slash" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-help";
         };
-        # Pin workspaces to monitors
-        # Monitor 1: ED340CU S3, Monitor 2: Built-in Retina Display, Monitor 3: DELL S3422DW
-        workspace-to-monitor-force-assignment = {
-          "1" = "ED340CU S3";      # Virtual Desktop 1
-          "2" = "Built-in Retina Display";
-          "3" = "DELL S3422DW";
-          "4" = "ED340CU S3";      # Virtual Desktop 2
-          "5" = "Built-in Retina Display";
-          "6" = "DELL S3422DW";
-          "7" = "ED340CU S3";      # Virtual Desktop 3
-          "8" = "Built-in Retina Display";
-          "9" = "DELL S3422DW";
-        };
+        # No force-assignment - script handles workspace placement dynamically
       };
     };
     
