@@ -4,20 +4,26 @@
 # Shows monitor number and current workspace on each display
 
 PLUGIN_DIR="$CONFIG_DIR/plugins"
+BAR="/run/current-system/sw/bin/sketchybar"
+
+# Get number of displays
+DISPLAY_COUNT=$(/run/current-system/sw/bin/aerospace list-monitors 2>/dev/null | wc -l | tr -d ' ')
+[ -z "$DISPLAY_COUNT" ] || [ "$DISPLAY_COUNT" -eq 0 ] && DISPLAY_COUNT=1
 
 ##### Bar Appearance #####
-sketchybar --bar \
+$BAR --bar \
   height=28 \
   blur_radius=0 \
   position=top \
   sticky=on \
-  padding_left=10 \
+  topmost=on \
+  padding_left=700 \
   padding_right=10 \
-  color=0x80000000 \
+  color=0x00000000 \
   display=all
 
 ##### Defaults #####
-sketchybar --default \
+$BAR --default \
   icon.font="SF Pro:Bold:14.0" \
   icon.color=0xffffffff \
   label.font="SF Pro:Bold:14.0" \
@@ -25,14 +31,16 @@ sketchybar --default \
   padding_left=5 \
   padding_right=5
 
-##### Monitor/Workspace Display #####
-# This item shows which monitor we're on and current workspace
-sketchybar --add item monitor_info left \
-  --set monitor_info \
-    script="$PLUGIN_DIR/monitor_info.sh" \
-    update_freq=1 \
-    icon.drawing=off \
-  --subscribe monitor_info space_change display_change front_app_switched
+##### Create one item per display #####
+for ((i=1; i<=DISPLAY_COUNT; i++)); do
+  $BAR --add item monitor_info_$i left \
+    --set monitor_info_$i \
+      script="MONITOR_NUM=$i $PLUGIN_DIR/monitor_info.sh" \
+      update_freq=1 \
+      icon.drawing=off \
+      associated_display=$i \
+    --subscribe monitor_info_$i space_change display_change front_app_switched
+done
 
 ##### Force initial update #####
-sketchybar --update
+$BAR --update

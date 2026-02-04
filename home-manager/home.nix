@@ -992,11 +992,32 @@ in {
     nix-direnv.enable = true;
   };
 
-  # home.file = {
-  #   # ... existing file configurations ...
-  #   ".config/atuin/config.toml".text =
-  #     builtins.readFile "${configsDir}/atuin-config.toml";
-  # };
+  # SketchyBar configuration for monitor/workspace display
+  home.file.".config/sketchybar/sketchybarrc" = {
+    source = ./sketchybar/sketchybarrc;
+    executable = true;
+  };
+  home.file.".config/sketchybar/plugins/monitor_info.sh" = {
+    source = ./sketchybar/plugins/monitor_info.sh;
+    executable = true;
+  };
+
+  # SketchyBar launchd agent - starts on login
+  launchd.agents.sketchybar = {
+    enable = true;
+    config = {
+      Label = "com.felixkratz.sketchybar";
+      ProgramArguments = [ "/run/current-system/sw/bin/sketchybar" ];
+      RunAtLoad = true;
+      KeepAlive = true;
+      EnvironmentVariables = {
+        PATH = "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin";
+      };
+      StandardOutPath = "/tmp/sketchybar.out.log";
+      StandardErrorPath = "/tmp/sketchybar.err.log";
+    };
+  };
+
   home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
   home.sessionVariables = { REDITOR = "nvim"; };
 

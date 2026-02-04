@@ -1,21 +1,20 @@
 #!/bin/bash
 
-# Get current display info from sketchybar
-DISPLAY_ID=$DISPLAY
+# Full paths for nix binaries
+BAR="/run/current-system/sw/bin/sketchybar"
+AEROSPACE="/run/current-system/sw/bin/aerospace"
 
-# Count monitors and figure out which one this bar is on
-MONITOR_COUNT=$(aerospace list-monitors 2>/dev/null | wc -l | tr -d ' ')
+# MONITOR_NUM is passed from the main config
+# Fall back to 1 if not set
+MONITOR_NUM=${MONITOR_NUM:-1}
 
-if [ -z "$MONITOR_COUNT" ] || [ "$MONITOR_COUNT" -eq 0 ]; then
-  MONITOR_COUNT=1
-fi
+# Count monitors
+MONITOR_COUNT=$($AEROSPACE list-monitors 2>/dev/null | wc -l | tr -d ' ')
+[ -z "$MONITOR_COUNT" ] || [ "$MONITOR_COUNT" -eq 0 ] && MONITOR_COUNT=1
 
 # Get the focused workspace
-FOCUSED_WS=$(aerospace list-workspaces --focused 2>/dev/null)
-
-if [ -z "$FOCUSED_WS" ]; then
-  FOCUSED_WS="?"
-fi
+FOCUSED_WS=$($AEROSPACE list-workspaces --focused 2>/dev/null)
+[ -z "$FOCUSED_WS" ] && FOCUSED_WS="?"
 
 # Calculate VD number: VD = ceil(workspace / monitor_count)
 if [ "$MONITOR_COUNT" -gt 0 ] && [ "$FOCUSED_WS" != "?" ]; then
@@ -23,10 +22,6 @@ if [ "$MONITOR_COUNT" -gt 0 ] && [ "$FOCUSED_WS" != "?" ]; then
 else
   VD="?"
 fi
-
-# Determine which monitor this sketchybar instance is on
-# DISPLAY variable from sketchybar gives us the display index (1-based)
-MONITOR_NUM=${DISPLAY:-1}
 
 # Calculate this monitor's workspace in current VD
 if [ "$VD" != "?" ] && [ "$MONITOR_COUNT" -gt 0 ]; then
@@ -36,4 +31,4 @@ else
 fi
 
 # Format output
-sketchybar --set $NAME label="MON $MONITOR_NUM  │  VD $VD  │  WS $MONITOR_WS"
+$BAR --set $NAME label="M$MONITOR_NUM │ VD$VD │ WS$MONITOR_WS"
