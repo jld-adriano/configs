@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# Move current window to a specific monitor in the current Virtual Desktop
+# Usage: aero-move-to-monitor <monitor_number>
+
+TARGET_MONITOR=$1
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+
+if [ -z "$TARGET_MONITOR" ] || [ "$TARGET_MONITOR" -lt 1 ] || [ "$TARGET_MONITOR" -gt "$MONITOR_COUNT" ]; then
+    echo "Usage: aero-move-to-monitor <1-$MONITOR_COUNT>"
+    exit 1
+fi
+
+# Get the focused workspace to determine current VD
+FOCUSED_WS=$(aerospace list-workspaces --focused)
+
+# Calculate which VD we're in (1-indexed)
+# VD = ceil(workspace / monitor_count)
+CURRENT_VD=$(( (FOCUSED_WS - 1) / MONITOR_COUNT + 1 ))
+
+# Calculate target workspace
+# workspace = (VD - 1) * monitor_count + target_monitor
+TARGET_WS=$(( (CURRENT_VD - 1) * MONITOR_COUNT + TARGET_MONITOR ))
+
+# Move the window
+aerospace move-node-to-workspace "$TARGET_WS"

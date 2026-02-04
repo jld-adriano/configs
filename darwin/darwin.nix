@@ -6,18 +6,13 @@
   # AEROSPACE WINDOW MANAGER SETUP
   # ------------------------------
   # This config uses AeroSpace as a tiling window manager with a "virtual desktop"
-  # system that spans all monitors simultaneously. Adapts to 2 or 3 monitors.
+  # system that spans all monitors simultaneously. Adapts to 1-5 monitors.
   #
-  # Monitors:
-  #   1. ED340CU S3 (external)
-  #   2. Built-in Retina Display (laptop)
-  #   3. DELL S3422DW (external)
-  #
-  # Virtual Desktops (3 monitors):
-  #   VD1: 1,2,3  |  VD2: 4,5,6  |  VD3: 7,8,9  |  VD4: 10,11,12
-  #
-  # Virtual Desktops (2 monitors):
-  #   VD1: 1,2    |  VD2: 3,4    |  VD3: 5,6    |  VD4: 7,8
+  # Virtual Desktops by monitor count:
+  #   5 monitors: VD1: 1-5    |  VD2: 6-10   |  VD3: 11-15  |  VD4: 16-20
+  #   3 monitors: VD1: 1,2,3  |  VD2: 4,5,6  |  VD3: 7,8,9  |  VD4: 10,11,12
+  #   2 monitors: VD1: 1,2    |  VD2: 3,4    |  VD3: 5,6    |  VD4: 7,8
+  #   1 monitor:  VD1: 1      |  VD2: 2      |  VD3: 3      |  VD4: 4
   #
   # Keybindings:
   #   alt-1/2/3       - Switch all monitors to Virtual Desktop 1/2/3
@@ -72,6 +67,9 @@
 
     # Development tools
     xcode-install
+
+    # Window management
+    sketchybar  # Customizable macOS status bar
   ];
 
   # System settings
@@ -178,10 +176,8 @@
           "alt-3" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 3";
           "alt-4" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 4";
           
-          # Move window to workspace
-          # VD1: 1=mon1, 2=mon2, 3=mon3
-          # VD2: 4=mon1, 5=mon2, 6=mon3
-          # VD3: 7=mon1, 8=mon2, 9=mon3
+          # Move window to workspace (workspaces numbered per VD × monitor count)
+          # With 5 monitors: VD1=1-5, VD2=6-10, VD3=11-15, VD4=16-20
           "alt-shift-1" = "move-node-to-workspace 1";
           "alt-shift-2" = "move-node-to-workspace 2";
           "alt-shift-3" = "move-node-to-workspace 3";
@@ -191,10 +187,31 @@
           "alt-shift-7" = "move-node-to-workspace 7";
           "alt-shift-8" = "move-node-to-workspace 8";
           "alt-shift-9" = "move-node-to-workspace 9";
+          "alt-shift-0" = "move-node-to-workspace 10";
+          "alt-ctrl-1" = "move-node-to-workspace 11";
+          "alt-ctrl-2" = "move-node-to-workspace 12";
+          "alt-ctrl-3" = "move-node-to-workspace 13";
+          "alt-ctrl-4" = "move-node-to-workspace 14";
+          "alt-ctrl-5" = "move-node-to-workspace 15";
+          "alt-ctrl-6" = "move-node-to-workspace 16";
+          "alt-ctrl-7" = "move-node-to-workspace 17";
+          "alt-ctrl-8" = "move-node-to-workspace 18";
+          "alt-ctrl-9" = "move-node-to-workspace 19";
+          "alt-ctrl-0" = "move-node-to-workspace 20";
           
           # Switch focus between monitors
           "alt-period" = "focus-monitor next";
           "alt-comma" = "focus-monitor prev";
+          
+          # Move window to specific monitor (stays in current VD)
+          "alt-ctrl-shift-1" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 1";
+          "alt-ctrl-shift-2" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 2";
+          "alt-ctrl-shift-3" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 3";
+          "alt-ctrl-shift-4" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 4";
+          "alt-ctrl-shift-5" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 5";
+          
+          # Identify monitors
+          "alt-i" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-identify";
           
           # Help
           "alt-shift-slash" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-help";

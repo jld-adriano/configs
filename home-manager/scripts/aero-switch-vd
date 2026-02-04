@@ -6,41 +6,70 @@
 VD=$1
 MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
 
-if [ "$MONITOR_COUNT" -eq 2 ]; then
-    # 2 monitors: VD1=1,2  VD2=3,4  VD3=5,6  VD4=7,8
-    case $VD in
-        1) W1=1; W2=2 ;;
-        2) W1=3; W2=4 ;;
-        3) W1=5; W2=6 ;;
-        4) W1=7; W2=8 ;;
-    esac
-    aerospace focus-monitor 1
-    aerospace summon-workspace $W1
-    aerospace focus-monitor 2
-    aerospace summon-workspace $W2
-    aerospace focus-monitor 1
-elif [ "$MONITOR_COUNT" -eq 3 ]; then
-    # 3 monitors: VD1=1,2,3  VD2=4,5,6  VD3=7,8,9  VD4=10,11,12
-    case $VD in
-        1) W1=1; W2=2; W3=3 ;;
-        2) W1=4; W2=5; W3=6 ;;
-        3) W1=7; W2=8; W3=9 ;;
-        4) W1=10; W2=11; W3=12 ;;
-    esac
-    aerospace focus-monitor 1
-    aerospace summon-workspace $W1
-    aerospace focus-monitor 2
-    aerospace summon-workspace $W2
-    aerospace focus-monitor 3
-    aerospace summon-workspace $W3
-    aerospace focus-monitor 1
-else
-    # Single monitor: just switch workspace
-    case $VD in
-        1) aerospace workspace 1 ;;
-        2) aerospace workspace 2 ;;
-        3) aerospace workspace 3 ;;
-        4) aerospace workspace 4 ;;
-    esac
-fi
+# Calculate workspace offset: (VD-1) * monitor_count
+# VD1 starts at workspace 1, VD2 at 1+count, VD3 at 1+2*count, etc.
+
+case $MONITOR_COUNT in
+    1)
+        # Single monitor: VD1=1, VD2=2, VD3=3, VD4=4
+        aerospace workspace $VD
+        ;;
+    2)
+        # 2 monitors: VD1=1,2  VD2=3,4  VD3=5,6  VD4=7,8
+        BASE=$(( (VD - 1) * 2 ))
+        aerospace focus-monitor 1 && sleep 0.15
+        aerospace summon-workspace $((BASE + 1)) && sleep 0.15
+        aerospace focus-monitor 2 && sleep 0.15
+        aerospace summon-workspace $((BASE + 2))
+        aerospace focus-monitor 1
+        ;;
+    3)
+        # 3 monitors: VD1=1,2,3  VD2=4,5,6  VD3=7,8,9  VD4=10,11,12
+        BASE=$(( (VD - 1) * 3 ))
+        aerospace focus-monitor 1 && sleep 0.15
+        aerospace summon-workspace $((BASE + 1)) && sleep 0.15
+        aerospace focus-monitor 2 && sleep 0.15
+        aerospace summon-workspace $((BASE + 2)) && sleep 0.15
+        aerospace focus-monitor 3 && sleep 0.15
+        aerospace summon-workspace $((BASE + 3))
+        aerospace focus-monitor 1
+        ;;
+    4)
+        # 4 monitors: VD1=1-4  VD2=5-8  VD3=9-12  VD4=13-16
+        BASE=$(( (VD - 1) * 4 ))
+        aerospace focus-monitor 1 && sleep 0.15
+        aerospace summon-workspace $((BASE + 1)) && sleep 0.15
+        aerospace focus-monitor 2 && sleep 0.15
+        aerospace summon-workspace $((BASE + 2)) && sleep 0.15
+        aerospace focus-monitor 3 && sleep 0.15
+        aerospace summon-workspace $((BASE + 3)) && sleep 0.15
+        aerospace focus-monitor 4 && sleep 0.15
+        aerospace summon-workspace $((BASE + 4))
+        aerospace focus-monitor 1
+        ;;
+    5)
+        # 5 monitors: VD1=1-5  VD2=6-10  VD3=11-15  VD4=16-20
+        BASE=$(( (VD - 1) * 5 ))
+        aerospace focus-monitor 1 && sleep 0.15
+        aerospace summon-workspace $((BASE + 1)) && sleep 0.15
+        aerospace focus-monitor 2 && sleep 0.15
+        aerospace summon-workspace $((BASE + 2)) && sleep 0.15
+        aerospace focus-monitor 3 && sleep 0.15
+        aerospace summon-workspace $((BASE + 3)) && sleep 0.15
+        aerospace focus-monitor 4 && sleep 0.15
+        aerospace summon-workspace $((BASE + 4)) && sleep 0.15
+        aerospace focus-monitor 5 && sleep 0.15
+        aerospace summon-workspace $((BASE + 5))
+        aerospace focus-monitor 1
+        ;;
+    *)
+        # Fallback for 6+ monitors: generic loop
+        BASE=$(( (VD - 1) * MONITOR_COUNT ))
+        for ((i=1; i<=MONITOR_COUNT; i++)); do
+            aerospace focus-monitor $i && sleep 0.15
+            aerospace summon-workspace $((BASE + i)) && sleep 0.15
+        done
+        aerospace focus-monitor 1
+        ;;
+esac
 

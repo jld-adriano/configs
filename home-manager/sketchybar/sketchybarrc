@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# SketchyBar config for AeroSpace monitor/workspace display
+# Shows monitor number and current workspace on each display
+
+PLUGIN_DIR="$CONFIG_DIR/plugins"
+
+##### Bar Appearance #####
+sketchybar --bar \
+  height=28 \
+  blur_radius=0 \
+  position=top \
+  sticky=on \
+  padding_left=10 \
+  padding_right=10 \
+  color=0x80000000 \
+  display=all
+
+##### Defaults #####
+sketchybar --default \
+  icon.font="SF Pro:Bold:14.0" \
+  icon.color=0xffffffff \
+  label.font="SF Pro:Bold:14.0" \
+  label.color=0xffffffff \
+  padding_left=5 \
+  padding_right=5
+
+##### Monitor/Workspace Display #####
+# This item shows which monitor we're on and current workspace
+sketchybar --add item monitor_info left \
+  --set monitor_info \
+    script="$PLUGIN_DIR/monitor_info.sh" \
+    update_freq=1 \
+    icon.drawing=off \
+  --subscribe monitor_info space_change display_change front_app_switched
+
+##### Force initial update #####
+sketchybar --update

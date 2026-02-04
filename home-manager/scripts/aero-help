@@ -1,42 +1,50 @@
 #!/usr/bin/env bash
 
 # AeroSpace Keybindings Help
-# Displays all configured keybindings in a notification
+# Displays keybindings with dynamic workspace layout based on current monitor count
 
-osascript -e 'display dialog "
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+
+# Calculate workspace ranges for each VD
+VD1_END=$MONITOR_COUNT
+VD2_START=$((MONITOR_COUNT + 1))
+VD2_END=$((MONITOR_COUNT * 2))
+VD3_START=$((MONITOR_COUNT * 2 + 1))
+VD3_END=$((MONITOR_COUNT * 3))
+VD4_START=$((MONITOR_COUNT * 3 + 1))
+VD4_END=$((MONITOR_COUNT * 4))
+
+osascript -e "display dialog \"
 ═══════════════════════════════════════
        AEROSPACE KEYBINDINGS
 ═══════════════════════════════════════
+       [ $MONITOR_COUNT monitors detected ]
+
+WORKSPACE LAYOUT
+  VD1: 1-$VD1_END  |  VD2: $VD2_START-$VD2_END  |  VD3: $VD3_START-$VD3_END  |  VD4: $VD4_START-$VD4_END
 
 VIRTUAL DESKTOPS (all monitors switch)
-  alt-1          → Virtual Desktop 1
-  alt-2          → Virtual Desktop 2
-  alt-3          → Virtual Desktop 3
+  alt-1/2/3/4        → Virtual Desktop 1-4
 
-MOVE WINDOW TO WORKSPACE
-  alt-shift-1-9  → Move to workspace 1-9
-  (1-3=VD1, 4-6=VD2, 7-9=VD3)
+MOVE TO MONITOR (stays in current VD)
+  alt-ctrl-shift-1-$MONITOR_COUNT → Move to monitor 1-$MONITOR_COUNT
+
+MOVE WINDOW TO WORKSPACE (absolute)
+  alt-shift-1-0      → Move to workspace 1-10
+  alt-ctrl-1-0       → Move to workspace 11-20
 
 WINDOW NAVIGATION (vim-style)
-  alt-h          → Focus left
-  alt-j          → Focus down
-  alt-k          → Focus up
-  alt-l          → Focus right
-
-MOVE WINDOWS
-  alt-shift-h    → Move left
-  alt-shift-j    → Move down
-  alt-shift-k    → Move up
-  alt-shift-l    → Move right
+  alt-h/j/k/l        → Focus left/down/up/right
+  alt-shift-h/j/k/l  → Move left/down/up/right
 
 LAYOUT
-  alt-f          → Toggle fullscreen
-  alt-shift-f    → Reset layout (tiles)
-  alt-b          → Balance sizes
+  alt-f              → Toggle fullscreen
+  alt-shift-f        → Reset layout (tiles)
+  alt-b              → Balance sizes
 
 MONITORS
-  alt-.          → Focus next monitor
-  alt-,          → Focus prev monitor
+  alt-. / alt-,      → Focus next/prev monitor
+  alt-i              → Identify monitors
 
-" with title "AeroSpace Help" buttons {"OK"} default button "OK"'
+\" with title \"AeroSpace Help\" buttons {\"OK\"} default button \"OK\""
 

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+# Show monitor number on each screen directly
+# Usage: aero-identify
+
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+
+# Save current focus to restore later
+ORIGINAL_WS=$(aerospace list-workspaces --focused)
+
+# Show a big number on each monitor sequentially
+for ((i=1; i<=MONITOR_COUNT; i++)); do
+    # Get monitor name
+    MONITOR_NAME=$(aerospace list-monitors --format '%{monitor-id} %{monitor-name}' | sed -n "${i}p" | cut -d' ' -f2-)
+    
+    # Focus this monitor and wait for focus to settle
+    aerospace focus-monitor $i
+    sleep 0.4
+    
+    # Show dialog on this monitor (auto-dismisses after 1.2 seconds)
+    osascript -e "display dialog \"
+
+
+                    【  $i  】
+
+              $MONITOR_NAME
+
+\" with title \"Monitor $i of $MONITOR_COUNT\" buttons {\"OK\"} giving up after 1"
+done
+
+# Restore original focus
+aerospace workspace $ORIGINAL_WS
