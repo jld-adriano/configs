@@ -43,6 +43,7 @@ LAYOUT
   alt-b              → Balance sizes
 
 MONITORS
+  cmd-1/2/3/4/5      → Focus monitor 1-5
   alt-. / alt-,      → Focus next/prev monitor
   alt-i              → Identify monitors
 

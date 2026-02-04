@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+
+# Test script for virtual desktop switching
+# Verifies that aero-switch-vd correctly switches all monitors to the expected workspaces
+
+SCRIPT_DIR="$(dirname "$0")"
+PASS=0
+FAIL=0
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo "=========================================="
+echo "  AeroSpace Virtual Desktop Test Suite"
+echo "=========================================="
+echo ""
+
+# Get monitor count
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+echo "Detected $MONITOR_COUNT monitors"
+echo ""
+
+# Function to get workspace for each monitor
+get_monitor_workspaces() {
+    local result=""
+    for ((i=1; i<=MONITOR_COUNT; i++)); do
+        # Get workspace visible on monitor i
+        ws=$(aerospace list-workspaces --monitor $i --visible 2>/dev/null | head -1)
+        result="$result$ws "
+    done
+    echo "$result" | xargs  # trim whitespace
+}
+
+# Function to test a VD switch
+test_vd() {
+    local vd=$1
+    local expected=""
+    
+    # Calculate expected workspaces
+    local base=$(( (vd - 1) * MONITOR_COUNT ))
+    for ((i=1; i<=MONITOR_COUNT; i++)); do
+        expected="$expected$((base + i)) "
+    done
+    expected=$(echo "$expected" | xargs)  # trim
+    
+    echo -n "Testing VD$vd (expected: $expected)... "
+    
+    # Run the switch
+    "$SCRIPT_DIR/aero-switch-vd" $vd
+    
+    # Wait for it to settle
+    sleep 0.5
+    
+    # Get actual state
+    actual=$(get_monitor_workspaces)
+    
+    if [ "$actual" == "$expected" ]; then
+        echo -e "${GREEN}PASS${NC} (got: $actual)"
+        ((PASS++))
+    else
+        echo -e "${RED}FAIL${NC} (got: $actual)"
+        ((FAIL++))
+    fi
+}
+
+# Run tests for each VD
+echo "Running VD switch tests..."
+echo ""
+
+for vd in 1 2 3 4; do
+    test_vd $vd
+done
+
+# Summary
+echo ""
+echo "=========================================="
+echo "  Results: ${GREEN}$PASS passed${NC}, ${RED}$FAIL failed${NC}"
+echo "=========================================="
+
+# Return to VD1
+echo ""
+echo "Returning to VD1..."
+"$SCRIPT_DIR/aero-switch-vd" 1
+
+if [ $FAIL -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi

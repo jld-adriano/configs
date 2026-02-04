@@ -203,6 +203,13 @@
           "alt-period" = "focus-monitor next";
           "alt-comma" = "focus-monitor prev";
           
+          # Focus specific monitor (cmd-1 through cmd-5)
+          "cmd-1" = "focus-monitor 1";
+          "cmd-2" = "focus-monitor 2";
+          "cmd-3" = "focus-monitor 3";
+          "cmd-4" = "focus-monitor 4";
+          "cmd-5" = "focus-monitor 5";
+          
           # Move window to specific monitor (stays in current VD)
           "alt-ctrl-shift-1" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 1";
           "alt-ctrl-shift-2" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 2";
