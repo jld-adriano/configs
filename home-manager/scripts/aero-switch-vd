@@ -6,26 +6,42 @@
 VD=$1
 MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
 
-# Delay between commands (increase if switching is unreliable)
-DELAY=0.25
-
 # Calculate base workspace for this VD
 BASE=$(( (VD - 1) * MONITOR_COUNT ))
 
 case $MONITOR_COUNT in
     1)
-        # Single monitor: just switch workspace
         aerospace workspace $VD
         ;;
     *)
-        # Multiple monitors: switch each monitor to its workspace in this VD
+        # Phase 1: Move all target workspaces to their monitors (fast)
         for ((i=1; i<=MONITOR_COUNT; i++)); do
-            aerospace focus-monitor $i
-            sleep $DELAY
-            aerospace summon-workspace $((BASE + i))
-            sleep $DELAY
+            TARGET_WS=$((BASE + i))
+            aerospace move-workspace-to-monitor --workspace $TARGET_WS $i 2>/dev/null
         done
-        # Return focus to monitor 1
+        sleep 0.15
+        
+        # Phase 2: Focus each monitor and switch to target workspace (fast)
+        for ((i=1; i<=MONITOR_COUNT; i++)); do
+            TARGET_WS=$((BASE + i))
+            aerospace focus-monitor $i
+            sleep 0.1
+            aerospace workspace $TARGET_WS
+            sleep 0.1
+        done
+        
+        # Phase 3: Verify and retry any that failed
+        for ((i=1; i<=MONITOR_COUNT; i++)); do
+            TARGET_WS=$((BASE + i))
+            CURRENT=$(aerospace list-workspaces --monitor $i --visible 2>/dev/null | head -1)
+            if [ "$CURRENT" != "$TARGET_WS" ]; then
+                aerospace focus-monitor $i
+                sleep 0.2
+                aerospace summon-workspace $TARGET_WS
+                sleep 0.2
+            fi
+        done
+        
         aerospace focus-monitor 1
         ;;
 esac

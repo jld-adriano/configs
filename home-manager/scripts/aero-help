@@ -41,6 +41,7 @@ LAYOUT
   alt-f              → Toggle fullscreen
   alt-shift-f        → Reset layout (tiles)
   alt-b              → Balance sizes
+  alt-d              → Distribute windows evenly
 
 MONITORS
   cmd-1/2/3/4/5      → Focus monitor 1-5

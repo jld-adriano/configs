@@ -88,7 +88,12 @@
         show-process-indicators = true;
         tilesize = 48;
         static-only = true;
-        mru-spaces = false;
+        mru-spaces = false;  # Don't auto-switch to space with open windows
+      };
+
+      # Spaces settings - disable macOS Spaces since we use AeroSpace
+      spaces = {
+        spans-displays = true;  # All displays share the same spaces (simpler for AeroSpace)
       };
 
       # Finder settings
@@ -143,11 +148,10 @@
     aerospace = {
       enable = true;
       settings = {
-        # Start borders for focused window highlighting
-        after-startup-command = [
-          "exec-and-forget borders active_color=0xffff3333 inactive_color=0x00000000 width=8.0"
-        ];
-        on-focused-monitor-changed = [ "move-mouse monitor-lazy-center" ];
+        # Borders is now managed by launchd agent in home.nix
+        after-startup-command = [];
+        # Disabled - was causing window movement issues when clicking
+        # on-focused-monitor-changed = [ "move-mouse monitor-lazy-center" ];
         mode.main.binding = {
           # Vim-style navigation between windows
           "alt-h" = "focus --boundaries-action wrap-around-the-workspace left";
@@ -203,12 +207,12 @@
           "alt-period" = "focus-monitor next";
           "alt-comma" = "focus-monitor prev";
           
-          # Focus specific monitor (cmd-1 through cmd-5)
-          "cmd-1" = "focus-monitor 1";
-          "cmd-2" = "focus-monitor 2";
-          "cmd-3" = "focus-monitor 3";
-          "cmd-4" = "focus-monitor 4";
-          "cmd-5" = "focus-monitor 5";
+          # Focus specific monitor (cmd-1 through cmd-5) - uses script with retry logic
+          "cmd-1" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-focus-monitor 1";
+          "cmd-2" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-focus-monitor 2";
+          "cmd-3" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-focus-monitor 3";
+          "cmd-4" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-focus-monitor 4";
+          "cmd-5" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-focus-monitor 5";
           
           # Move window to specific monitor (stays in current VD)
           "alt-ctrl-shift-1" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-move-to-monitor 1";
@@ -219,6 +223,9 @@
           
           # Identify monitors
           "alt-i" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-identify";
+          
+          # Distribute windows evenly across monitors
+          "alt-d" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-distribute";
           
           # Help
           "alt-shift-slash" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-help";

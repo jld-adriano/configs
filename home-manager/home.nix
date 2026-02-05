@@ -1018,6 +1018,24 @@ in {
     };
   };
 
+  # Borders launchd agent - window border highlighting
+  launchd.agents.borders = {
+    enable = true;
+    config = {
+      Label = "com.felixkratz.borders";
+      ProgramArguments = [ 
+        "/opt/homebrew/bin/borders"
+        "active_color=0xffff3333"
+        "inactive_color=0x00000000"
+        "width=20.0"
+      ];
+      RunAtLoad = true;
+      KeepAlive = true;
+      StandardOutPath = "/tmp/borders.out.log";
+      StandardErrorPath = "/tmp/borders.err.log";
+    };
+  };
+
   home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
   home.sessionVariables = { REDITOR = "nvim"; };
 

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+# Evenly distribute ALL windows across monitors in current VD
+# Gathers windows from all workspaces (including orphans) and redistributes them
+# Usage: aero-distribute
+
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+
+# Get the focused workspace to determine current VD
+FOCUSED_WS=$(aerospace list-workspaces --focused)
+CURRENT_VD=$(( (FOCUSED_WS - 1) / MONITOR_COUNT + 1 ))
+
+# Clamp VD to valid range
+[ "$CURRENT_VD" -lt 1 ] && CURRENT_VD=1
+[ "$CURRENT_VD" -gt 4 ] && CURRENT_VD=1
+
+echo "Current VD: $CURRENT_VD (workspaces $(( (CURRENT_VD-1)*MONITOR_COUNT + 1 ))-$(( CURRENT_VD*MONITOR_COUNT )))"
+
+# Get ALL windows from ALL workspaces
+WINDOWS=()
+while IFS= read -r wid; do
+    [ -n "$wid" ] && WINDOWS+=("$wid")
+done < <(aerospace list-windows --all --format '%{window-id}' 2>/dev/null)
+
+WINDOW_COUNT=${#WINDOWS[@]}
+
+if [ $WINDOW_COUNT -eq 0 ]; then
+    echo "No windows to distribute"
+    exit 0
+fi
+
+echo "Distributing $WINDOW_COUNT windows across $MONITOR_COUNT monitors..."
+
+# Distribute windows round-robin across monitors in current VD
+for ((i=0; i<WINDOW_COUNT; i++)); do
+    WINDOW_ID=${WINDOWS[$i]}
+    TARGET_MONITOR=$(( (i % MONITOR_COUNT) + 1 ))
+    TARGET_WS=$(( (CURRENT_VD - 1) * MONITOR_COUNT + TARGET_MONITOR ))
+    
+    # Move window to target workspace
+    aerospace move-node-to-workspace --window-id $WINDOW_ID $TARGET_WS 2>/dev/null
+    sleep 0.05
+done
+
+# Switch to VD to update displays
+~/projs/configs/home-manager/scripts/aero-switch-vd $CURRENT_VD
+
+# Flatten and balance each workspace to ensure all windows are tiled and visible
+for ((i=1; i<=MONITOR_COUNT; i++)); do
+    WS=$(( (CURRENT_VD - 1) * MONITOR_COUNT + i ))
+    aerospace focus-monitor $i 2>/dev/null
+    sleep 0.1
+    # Reset to tiles layout to make all windows visible (not stacked)
+    aerospace flatten-workspace-tree 2>/dev/null
+    aerospace layout tiles 2>/dev/null
+    aerospace balance-sizes 2>/dev/null
+done
+
+# Return to monitor 1
+aerospace focus-monitor 1
+
+echo "Done! $WINDOW_COUNT windows distributed to VD$CURRENT_VD."

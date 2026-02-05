@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+# Focus a specific monitor with retry logic
+# Usage: aero-focus-monitor <monitor_number>
+
+TARGET=$1
+
+if [ -z "$TARGET" ]; then
+    echo "Usage: aero-focus-monitor <monitor_number>"
+    exit 1
+fi
+
+# First attempt
+aerospace focus-monitor $TARGET
+sleep 0.1
+
+# Verify and retry if needed
+CURRENT=$(aerospace list-monitors --focused 2>/dev/null | awk '{print $1}')
+if [ "$CURRENT" != "$TARGET" ]; then
+    # Retry
+    aerospace focus-monitor $TARGET
+    sleep 0.15
+    
+    # Second verify
+    CURRENT=$(aerospace list-monitors --focused 2>/dev/null | awk '{print $1}')
+    if [ "$CURRENT" != "$TARGET" ]; then
+        # Final attempt with longer delay
+        sleep 0.2
+        aerospace focus-monitor $TARGET
+    fi
+fi
