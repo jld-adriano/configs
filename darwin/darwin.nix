@@ -225,7 +225,13 @@
           "alt-i" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-identify";
           
           # Distribute windows evenly across monitors
-          "alt-d" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-distribute";
+          "alt-ctrl-d" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-distribute";
+          
+          # Organize windows by app (Chrome→1,2,4,5 Slack→3 Cursor→8 other→6,7,9,10)
+          "alt-shift-d" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-organize";
+          
+          # Search Chrome windows by title
+          "alt-s" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-chrome-search";
           
           # Help
           "alt-shift-slash" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-help";
