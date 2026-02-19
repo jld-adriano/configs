@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+# Search Chrome windows by title using fzf in a WezTerm popup
+# Focuses the selected window in AeroSpace
+# Usage: aero-chrome-search
+
+RESULT_FILE=$(mktemp /tmp/chrome-search.XXXXXX)
+
+# Launch WezTerm with a small window running the fzf picker
+wezterm start --class chrome-search -- bash -c '
+    WINDOWS=$(aerospace list-windows --all --format "%{window-id}|%{window-title}" 2>/dev/null | grep "Google Chrome")
+    if [ -z "$WINDOWS" ]; then
+        echo "No Chrome windows found"
+        sleep 1
+        exit 1
+    fi
+    SELECTED=$(echo "$WINDOWS" | fzf \
+        --delimiter="|" \
+        --with-nth=2 \
+        --prompt="Chrome window > " \
+        --layout=reverse \
+        --border \
+        --no-info)
+    echo "$SELECTED" > "'"$RESULT_FILE"'"
+'
+
+# Read the result
+RESULT=$(cat "$RESULT_FILE" 2>/dev/null)
+rm -f "$RESULT_FILE"
+
+# Parse and focus
+WIN_ID=$(echo "$RESULT" | cut -d'|' -f1 | xargs)
+
+if [ -n "$WIN_ID" ] && [ "$WIN_ID" != "" ]; then
+    aerospace focus --window-id $WIN_ID 2>/dev/null
+fi
