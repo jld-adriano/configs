@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""
+Organize windows into workspaces with minimal moves.
+
+Config at the top defines the layout. The script:
+1. Classifies windows by app/URL
+2. Computes ideal placement from config
+3. Only moves windows that are in the wrong spot
+"""
+
+import subprocess
+import re
+
+# ── Layout Config ───────────────────────────────────────────────────────────
+# Each slot is (workspace, max_count, priority_types)
+# Windows are placed into slots in order. Higher priority types fill first.
+# Monitor 3 = laptop (WS 3 in VD1, WS 8 in VD2) → smaller capacity
+
+SLOTS = [
+    # (workspace, capacity, description)
+    (5,  "slack",   1),   # Slack gets WS 5
+    (5,  "devin",   1),   # 1 Devin alongside Slack
+    (1,  "devin",   5),   # External monitors - Devin priority
+    (2,  "devin",   5),
+    (4,  "devin",   5),
+    (3,  "devin",   2),   # Laptop - smaller
+    (1,  "chrome",  0),   # Fill remaining capacity with other Chrome
+    (2,  "chrome",  0),   # (0 = fill to workspace cap)
+    (4,  "chrome",  0),
+    (3,  "chrome",  0),
+    (6,  "chrome",  5),   # Overflow external
+    (7,  "chrome",  5),
+    (9,  "chrome",  5),
+    (10, "chrome",  5),
+    (8,  "chrome",  2),   # Overflow laptop
+    (11, "other",   5),   # Everything else, spread evenly
+    (12, "other",   5),
+    (13, "other",   5),
+    (14, "other",   5),
+    (15, "other",   5),
+]
+
+WS_MAX = {1: 5, 2: 5, 3: 2, 4: 5, 5: 2, 6: 5, 7: 5, 8: 2, 9: 5, 10: 5,
+           11: 99, 12: 99, 13: 99, 14: 99, 15: 99}
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def run(cmd):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15).stdout.strip()
+
+def get_chrome_urls():
+    out = run("""osascript -e '
+tell application "Google Chrome"
+    set urls to URL of active tab of every window
+    set titles to title of active tab of every window
+    set output to ""
+    repeat with i from 1 to count of titles
+        set output to output & (item i of titles) & "|||" & (item i of urls) & linefeed
+    end repeat
+    return output
+end tell'""")
+    result = {}
+    for line in out.splitlines():
+        if "|||" in line:
+            title, url = line.split("|||", 1)
+            result[title.strip()] = url.strip()
+    return result
+
+def clean_title(title):
+    title = re.sub(r"\s*-\s*Google Chrome.*$", "", title)
+    title = re.sub(r"\s*-\s*High memory usage.*$", "", title)
+    return title.strip()
+
+def classify(window, chrome_urls):
+    app = window["app"]
+    if app == "Slack":
+        return "slack"
+    if app == "Google Chrome":
+        url = chrome_urls.get(clean_title(window["title"]), "")
+        return "devin" if "app.devin.ai" in url else "chrome"
+    return "other"
+
+
+# ── Main ────────────────────────────────────────────────────────────────────
+
+def main():
+    chrome_urls = get_chrome_urls()
+
+    # Get all windows
+    windows = []
+    for line in run("aerospace list-windows --all --format '%{window-id}|%{workspace}|%{app-name}|%{window-title}'").splitlines():
+        parts = line.split("|", 3)
+        if len(parts) < 4:
+            continue
+        w = {"wid": int(parts[0].strip()), "ws": int(parts[1].strip()),
+             "app": parts[2].strip(), "title": parts[3].strip()}
+        w["type"] = classify(w, chrome_urls)
+        windows.append(w)
+
+    by_type = {}
+    for w in windows:
+        by_type.setdefault(w["type"], []).append(w)
+
+    for t in by_type:
+        print(f"  {t}: {len(by_type[t])}")
+
+    # Compute ideal placement
+    target = {}           # wid → workspace
+    ws_filled = {ws: 0 for ws in WS_MAX}
+    pools = {t: list(ws) for t, ws in by_type.items()}  # mutable copies
+
+    for ws, wtype, cap in SLOTS:
+        if cap == 0:
+            cap = WS_MAX[ws] - ws_filled[ws]
+        pool = pools.get(wtype, [])
+        # Prefer windows already on this workspace (reduces drift)
+        pool.sort(key=lambda w: (0 if w["ws"] == ws else 1))
+        placed = 0
+        while placed < cap and pool and ws_filled[ws] < WS_MAX[ws]:
+            w = pool.pop(0)
+            target[w["wid"]] = ws
+            ws_filled[ws] += 1
+            placed += 1
+
+    # Anything leftover (shouldn't happen with enough slots)
+    for wtype, pool in pools.items():
+        for w in pool:
+            if w["wid"] not in target:
+                print(f"  Warning: no slot for {w['app']} ({w['wid']})")
+
+    # Diff and move
+    moved = kept = 0
+    for w in windows:
+        t = target.get(w["wid"])
+        if t is None:
+            continue
+        if w["ws"] != t:
+            run(f"aerospace move-node-to-workspace --window-id {w['wid']} {t}")
+            moved += 1
+        else:
+            kept += 1
+
+    print(f"\nDrift: {moved} moved, {kept} already in place")
+
+    # Summary
+    print("\nLayout:")
+    for ws in sorted(WS_MAX):
+        items = [w for w in windows if target.get(w["wid"]) == ws]
+        if not items:
+            continue
+        counts = {}
+        for w in items:
+            counts[w["type"]] = counts.get(w["type"], 0) + 1
+        desc = " + ".join(f"{c} {t}" for t, c in counts.items())
+        print(f"  WS {ws}: {desc}")
+
+
+if __name__ == "__main__":
+    main()

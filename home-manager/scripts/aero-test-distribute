@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+
+# Test script for window distribution
+# Shows before/after state and verifies even distribution
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+SCRIPT_DIR="$(dirname "$0")"
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+
+echo "=========================================="
+echo "  Window Distribution Test"
+echo "=========================================="
+echo "Monitors: $MONITOR_COUNT"
+echo ""
+
+# Function to get window count per workspace
+show_distribution() {
+    echo "$1:"
+    for ws in $(aerospace list-windows --all --format '%{workspace}' 2>/dev/null | sort -n | uniq); do
+        count=$(aerospace list-windows --workspace $ws --format '%{window-id}' 2>/dev/null | wc -l | tr -d ' ')
+        # Color orphan workspaces differently
+        if [ "$ws" -gt 20 ]; then
+            echo -e "  WS $ws: ${RED}$count windows (ORPHAN)${NC}"
+        elif [ "$ws" -le "$MONITOR_COUNT" ]; then
+            echo -e "  WS $ws: ${GREEN}$count windows${NC}"
+        else
+            echo "  WS $ws: $count windows"
+        fi
+    done
+    echo ""
+}
+
+# Show before state
+show_distribution "BEFORE"
+
+# Count total windows
+TOTAL_BEFORE=$(aerospace list-windows --all --format '%{window-id}' 2>/dev/null | wc -l | tr -d ' ')
+echo "Total windows: $TOTAL_BEFORE"
+echo ""
+
+# Run distribute
+echo "Running aero-distribute..."
+echo "---"
+"$SCRIPT_DIR/aero-distribute"
+echo "---"
+echo ""
+
+# Show after state
+show_distribution "AFTER"
+
+# Verify distribution
+TOTAL_AFTER=$(aerospace list-windows --all --format '%{window-id}' 2>/dev/null | wc -l | tr -d ' ')
+echo "Total windows after: $TOTAL_AFTER"
+
+# Check no orphan workspaces remain
+ORPHAN_COUNT=$(aerospace list-windows --all --format '%{workspace}' 2>/dev/null | awk -v max=$((MONITOR_COUNT*4)) '$1 > max' | wc -l | tr -d ' ')
+
+if [ "$ORPHAN_COUNT" -gt 0 ]; then
+    echo -e "${RED}FAIL: $ORPHAN_COUNT windows still on orphan workspaces${NC}"
+else
+    echo -e "${GREEN}PASS: No orphan workspaces${NC}"
+fi
+
+# Check even distribution in VD1
+echo ""
+echo "VD1 Distribution (workspaces 1-$MONITOR_COUNT):"
+EXPECTED_PER_WS=$((TOTAL_AFTER / MONITOR_COUNT))
+REMAINDER=$((TOTAL_AFTER % MONITOR_COUNT))
+
+for ((i=1; i<=MONITOR_COUNT; i++)); do
+    count=$(aerospace list-windows --workspace $i --format '%{window-id}' 2>/dev/null | wc -l | tr -d ' ')
+    # Expected is either floor or ceil depending on position
+    if [ "$i" -le "$REMAINDER" ]; then
+        expected=$((EXPECTED_PER_WS + 1))
+    else
+        expected=$EXPECTED_PER_WS
+    fi
+    
+    if [ "$count" -ge "$((expected - 1))" ] && [ "$count" -le "$((expected + 1))" ]; then
+        echo -e "  WS $i: $count windows ${GREEN}(~even)${NC}"
+    else
+        echo -e "  WS $i: $count windows ${YELLOW}(expected ~$expected)${NC}"
+    fi
+done
+
+echo ""
+echo "=========================================="

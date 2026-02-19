@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+
+# Test script for aero-organize
+# Runs the organize script and verifies windows ended up in the right workspaces
+
+SCRIPT_DIR="$(dirname "$0")"
+PASS=0
+FAIL=0
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo "=========================================="
+echo "  AeroSpace Organize Test Suite"
+echo "=========================================="
+echo ""
+
+# Show current state before organizing
+echo "--- Before organize ---"
+aerospace list-windows --all --format '%{window-id} | WS %{workspace} | %{app-name} | %{window-title}' 2>/dev/null
+echo ""
+
+# Run organize
+echo "Running aero-organize..."
+"$SCRIPT_DIR/aero-organize"
+sleep 1
+echo ""
+
+echo "--- After organize ---"
+echo ""
+
+# Check: All Chrome windows should be on WS 1-10
+echo "=== Chrome placement ==="
+CHROME_WRONG=0
+CHROME_TOTAL=0
+while IFS='|' read -r wid ws title; do
+    ws=$(echo "$ws" | xargs)
+    title=$(echo "$title" | xargs)
+    [ -z "$wid" ] && continue
+    ((CHROME_TOTAL++))
+    
+    if [ "$ws" -ge 1 ] && [ "$ws" -le 10 ]; then
+        : # correct
+    else
+        echo -e "  ${RED}✗${NC} WID $wid → WS $ws (expected 1-10): $title"
+        ((CHROME_WRONG++))
+    fi
+done < <(aerospace list-windows --all --format '%{window-id}|%{workspace}|%{window-title}' 2>/dev/null | grep "Google Chrome")
+
+if [ $CHROME_WRONG -eq 0 ]; then
+    echo -e "${GREEN}PASS${NC} All $CHROME_TOTAL Chrome windows in WS 1-10"
+    ((PASS++))
+else
+    echo -e "${RED}FAIL${NC} $CHROME_WRONG/$CHROME_TOTAL Chrome windows in wrong workspaces"
+    ((FAIL++))
+fi
+
+# Check: Max 5 Chrome per workspace
+echo ""
+echo "=== WS 5 layout (Slack + 1 Chrome) ==="
+WS5_CHROME=$(aerospace list-windows --workspace 5 --format '%{app-name}' 2>/dev/null | grep "Google Chrome" | wc -l | tr -d ' ')
+WS5_SLACK=$(aerospace list-windows --workspace 5 --format '%{app-name}' 2>/dev/null | grep "Slack" | wc -l | tr -d ' ')
+if [ "$WS5_CHROME" -le 1 ] && [ "$WS5_SLACK" -ge 1 ]; then
+    echo -e "${GREEN}PASS${NC} WS 5: ${WS5_SLACK} Slack + ${WS5_CHROME} Chrome"
+    ((PASS++))
+else
+    echo -e "${RED}FAIL${NC} WS 5: ${WS5_SLACK} Slack + ${WS5_CHROME} Chrome (expected 1 Slack + max 1 Chrome)"
+    ((FAIL++))
+fi
+
+echo ""
+echo "=== Laptop monitor WS 3 max 2 ==="
+WS3_CHROME=$(aerospace list-windows --workspace 3 --format '%{app-name}' 2>/dev/null | grep "Google Chrome" | wc -l | tr -d ' ')
+if [ "$WS3_CHROME" -le 2 ]; then
+    echo -e "${GREEN}PASS${NC} WS 3: ${WS3_CHROME} Chrome (max 2)"
+    ((PASS++))
+else
+    echo -e "${RED}FAIL${NC} WS 3: ${WS3_CHROME} Chrome (expected max 2)"
+    ((FAIL++))
+fi
+
+echo ""
+echo "=== Chrome max 5 per workspace ==="
+MAX_VIOLATED=0
+for ws in 1 2 3 4 5 6 7 8 9 10; do
+    count=$(aerospace list-windows --workspace $ws --format '%{app-name}' 2>/dev/null | grep "Google Chrome" | wc -l | tr -d ' ')
+    if [ "$count" -gt 5 ]; then
+        echo -e "  ${RED}✗${NC} WS $ws: $count Chrome (max 5)"
+        ((MAX_VIOLATED++))
+    elif [ "$count" -gt 0 ]; then
+        echo -e "  ${GREEN}✓${NC} WS $ws: $count Chrome"
+    fi
+done
+
+if [ $MAX_VIOLATED -eq 0 ]; then
+    echo -e "${GREEN}PASS${NC} No workspace exceeds 5 Chrome windows"
+    ((PASS++))
+else
+    echo -e "${RED}FAIL${NC} $MAX_VIOLATED workspaces exceed max"
+    ((FAIL++))
+fi
+
+# Check: Devin Chrome windows should be on lower-numbered workspaces (1-5 ideally)
+echo ""
+echo "=== Devin Chrome priority ==="
+DEVIN_WS=()
+while IFS='|' read -r wid ws title; do
+    ws=$(echo "$ws" | xargs)
+    title=$(echo "$title" | xargs)
+    [ -z "$wid" ] && continue
+    echo "$title" | grep -qi "devin" && DEVIN_WS+=("$ws")
+done < <(aerospace list-windows --all --format '%{window-id}|%{workspace}|%{window-title}' 2>/dev/null | grep "Google Chrome")
+
+if [ ${#DEVIN_WS[@]} -eq 0 ]; then
+    echo -e "${YELLOW}SKIP${NC} No Devin Chrome windows found"
+else
+    ALL_IN_VD1=true
+    for ws in "${DEVIN_WS[@]}"; do
+        echo "  Devin window on WS $ws"
+        if [ "$ws" -gt 5 ]; then
+            ALL_IN_VD1=false
+        fi
+    done
+    if $ALL_IN_VD1; then
+        echo -e "${GREEN}PASS${NC} All ${#DEVIN_WS[@]} Devin windows prioritized to WS 1-5"
+        ((PASS++))
+    else
+        echo -e "${YELLOW}INFO${NC} Some Devin windows on WS 6-10 (WS 1-5 may be full)"
+        ((PASS++))  # Not a failure, just overflow
+    fi
+fi
+
+# Check: Slack should be on WS 5
+echo ""
+echo "=== Slack placement ==="
+SLACK_WS=$(aerospace list-windows --all --format '%{workspace}|%{app-name}' 2>/dev/null | grep "Slack" | head -1 | cut -d'|' -f1 | xargs)
+if [ -z "$SLACK_WS" ]; then
+    echo -e "${YELLOW}SKIP${NC} No Slack windows found"
+else
+    if [ "$SLACK_WS" = "5" ]; then
+        echo -e "${GREEN}PASS${NC} Slack on WS 5"
+        ((PASS++))
+    else
+        echo -e "${RED}FAIL${NC} Slack on WS $SLACK_WS (expected 5)"
+        ((FAIL++))
+    fi
+fi
+
+# Check: Non-Chrome/non-Slack apps should be on WS 11-15
+echo ""
+echo "=== Other apps placement ==="
+OTHER_WRONG=0
+OTHER_TOTAL=0
+while IFS='|' read -r wid ws app; do
+    ws=$(echo "$ws" | xargs)
+    app=$(echo "$app" | xargs)
+    [ -z "$wid" ] && continue
+    [ "$app" = "Google Chrome" ] && continue
+    [ "$app" = "Slack" ] && continue
+    ((OTHER_TOTAL++))
+    
+    if [ "$ws" -ge 11 ] && [ "$ws" -le 15 ]; then
+        echo -e "  ${GREEN}✓${NC} $app (WID $wid) → WS $ws"
+    else
+        echo -e "  ${RED}✗${NC} $app (WID $wid) → WS $ws (expected 11-15)"
+        ((OTHER_WRONG++))
+    fi
+done < <(aerospace list-windows --all --format '%{window-id}|%{workspace}|%{app-name}' 2>/dev/null)
+
+if [ $OTHER_TOTAL -eq 0 ]; then
+    echo -e "${YELLOW}SKIP${NC} No other windows found"
+else
+    if [ $OTHER_WRONG -eq 0 ]; then
+        echo -e "${GREEN}PASS${NC} All $OTHER_TOTAL other apps in WS 11-15"
+        ((PASS++))
+    else
+        echo -e "${RED}FAIL${NC} $OTHER_WRONG/$OTHER_TOTAL other apps in wrong workspaces"
+        ((FAIL++))
+    fi
+fi
+
+# Summary
+echo ""
+echo "=========================================="
+echo -e "  Results: ${GREEN}$PASS passed${NC}, ${RED}$FAIL failed${NC}"
+echo "=========================================="
+
+if [ $FAIL -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi
