@@ -2,55 +2,103 @@
 """
 Organize windows into workspaces with minimal moves.
 
-Config at the top defines the layout. The script:
-1. Classifies windows by app/URL
-2. Computes ideal placement from config
-3. Only moves windows that are in the wrong spot
+Config at the top defines the layout per monitor count. The script:
+1. Detects monitor count
+2. Classifies windows by app/URL
+3. Computes ideal placement from config
+4. Only moves windows that are in the wrong spot
 """
 
 import subprocess
 import re
 
-# ── Layout Config ───────────────────────────────────────────────────────────
-# Each slot is (workspace, max_count, priority_types)
-# Windows are placed into slots in order. Higher priority types fill first.
-# Monitor 3 = laptop (WS 3 in VD1, WS 8 in VD2) → smaller capacity
+# ── Layout Configs ──────────────────────────────────────────────────────────
+# Each slot: (workspace, window_type, capacity)
+# capacity=0 means "fill to workspace max"
+# Windows are placed into slots in order. Types listed first get priority.
 
-SLOTS = [
-    # (workspace, capacity, description)
-    (5,  "slack",   1),   # Slack gets WS 5
-    (5,  "devin",   1),   # 1 Devin alongside Slack
-    (1,  "devin",   5),   # External monitors - Devin priority
-    (2,  "devin",   5),
-    (4,  "devin",   5),
-    (3,  "devin",   2),   # Laptop - smaller
-    (1,  "chrome",  0),   # Fill remaining capacity with other Chrome
-    (2,  "chrome",  0),   # (0 = fill to workspace cap)
-    (4,  "chrome",  0),
-    (3,  "chrome",  0),
-    (6,  "chrome",  5),   # Overflow external
-    (7,  "chrome",  5),
-    (9,  "chrome",  5),
-    (10, "chrome",  5),
-    (8,  "chrome",  2),   # Overflow laptop
-    (11, "other",   5),   # Everything else, spread evenly
-    (12, "other",   5),
-    (13, "other",   5),
-    (14, "other",   5),
-    (15, "other",   5),
-]
+LAYOUTS = {
+    5: {
+        "slots": [
+            (5,  "slack",   1),
+            (5,  "devin",   1),
+            (1,  "devin",   5),
+            (2,  "devin",   5),
+            (4,  "devin",   5),
+            (3,  "devin",   2),   # Laptop
+            (1,  "chrome",  0),
+            (2,  "chrome",  0),
+            (4,  "chrome",  0),
+            (3,  "chrome",  0),
+            (6,  "chrome",  5),
+            (7,  "chrome",  5),
+            (9,  "chrome",  5),
+            (10, "chrome",  5),
+            (8,  "chrome",  2),   # Laptop
+            (11, "other",   5),
+            (12, "other",   5),
+            (13, "other",   5),
+            (14, "other",   5),
+            (15, "other",   5),
+        ],
+        "ws_max": {1: 5, 2: 5, 3: 2, 4: 5, 5: 2, 6: 5, 7: 5, 8: 2, 9: 5, 10: 5,
+                   11: 99, 12: 99, 13: 99, 14: 99, 15: 99},
+    },
+    2: {
+        # Monitor 1 = odd WS (1,3,5,7...), Monitor 2 = even WS (2,4,6,8...)
+        # Pattern: 5 devin, 1 slack, then repeat (5 devin, 2 devin) per VD
+        "slots": [
+            (1,  "devin",   4),   # VD1 mon1
+            (2,  "slack",   1),   # VD1 mon2 (slack)
+            (2,  "devin",   1),   # VD1 mon2 (1 devin with slack)
+            (3,  "devin",   4),   # VD2 mon1
+            (4,  "devin",   2),   # VD2 mon2
+            (5,  "devin",   4),   # VD3 mon1
+            (6,  "devin",   2),   # VD3 mon2
+            (7,  "devin",   4),   # VD4 mon1
+            (8,  "devin",   2),   # VD4 mon2
+            (1,  "chrome",  0),   # Fill remaining with other Chrome
+            (2,  "chrome",  0),
+            (3,  "chrome",  0),
+            (4,  "chrome",  0),
+            (5,  "chrome",  0),
+            (6,  "chrome",  0),
+            (7,  "chrome",  0),
+            (8,  "chrome",  0),
+            (9,  "other",   5),
+            (10, "other",   5),
+        ],
+        "ws_max": {1: 5, 2: 2, 3: 5, 4: 2, 5: 5, 6: 2, 7: 5, 8: 2, 9: 99, 10: 99},
+    },
+}
 
-WS_MAX = {1: 5, 2: 5, 3: 2, 4: 5, 5: 2, 6: 5, 7: 5, 8: 2, 9: 5, 10: 5,
-           11: 99, 12: 99, 13: 99, 14: 99, 15: 99}
+# Fallback: spread evenly across N workspaces
+def make_fallback_layout(n):
+    slots = []
+    ws_max = {}
+    for i in range(1, n + 1):
+        slots.append((i, "devin", 5))
+        ws_max[i] = 5
+    for i in range(1, n + 1):
+        slots.append((i, "chrome", 0))
+    for i in range(1, n + 1):
+        slots.append((i, "slack", 0))
+    for i in range(1, n + 1):
+        slots.append((i, "other", 0))
+    return {"slots": slots, "ws_max": ws_max}
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def run(cmd):
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15).stdout.strip()
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30).stdout.strip()
 
 def get_chrome_urls():
-    out = run("""osascript -e '
+    try:
+        # Skip if Chrome isn't running
+        if "running" not in run("pgrep -x 'Google Chrome' && echo running || echo no"):
+            return {}
+        out = run("""osascript -e '
 tell application "Google Chrome"
     set urls to URL of active tab of every window
     set titles to title of active tab of every window
@@ -60,12 +108,15 @@ tell application "Google Chrome"
     end repeat
     return output
 end tell'""")
-    result = {}
-    for line in out.splitlines():
-        if "|||" in line:
-            title, url = line.split("|||", 1)
-            result[title.strip()] = url.strip()
-    return result
+        result = {}
+        for line in out.splitlines():
+            if "|||" in line:
+                title, url = line.split("|||", 1)
+                result[title.strip()] = url.strip()
+        return result
+    except Exception:
+        print("  Warning: Chrome AppleScript timed out, skipping Devin detection")
+        return {}
 
 def clean_title(title):
     title = re.sub(r"\s*-\s*Google Chrome.*$", "", title)
@@ -85,6 +136,14 @@ def classify(window, chrome_urls):
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    # Detect monitor count
+    monitor_count = len(run("aerospace list-monitors").splitlines())
+    layout = LAYOUTS.get(monitor_count, make_fallback_layout(monitor_count))
+    slots = layout["slots"]
+    ws_max = layout["ws_max"]
+
+    print(f"Monitors: {monitor_count}")
+
     chrome_urls = get_chrome_urls()
 
     # Get all windows
@@ -106,24 +165,22 @@ def main():
         print(f"  {t}: {len(by_type[t])}")
 
     # Compute ideal placement
-    target = {}           # wid → workspace
-    ws_filled = {ws: 0 for ws in WS_MAX}
-    pools = {t: list(ws) for t, ws in by_type.items()}  # mutable copies
+    target = {}
+    ws_filled = {ws: 0 for ws in ws_max}
+    pools = {t: list(ws) for t, ws in by_type.items()}
 
-    for ws, wtype, cap in SLOTS:
+    for ws, wtype, cap in slots:
         if cap == 0:
-            cap = WS_MAX[ws] - ws_filled[ws]
+            cap = ws_max.get(ws, 5) - ws_filled.get(ws, 0)
         pool = pools.get(wtype, [])
-        # Prefer windows already on this workspace (reduces drift)
         pool.sort(key=lambda w: (0 if w["ws"] == ws else 1))
         placed = 0
-        while placed < cap and pool and ws_filled[ws] < WS_MAX[ws]:
+        while placed < cap and pool and ws_filled.get(ws, 0) < ws_max.get(ws, 5):
             w = pool.pop(0)
             target[w["wid"]] = ws
-            ws_filled[ws] += 1
+            ws_filled[ws] = ws_filled.get(ws, 0) + 1
             placed += 1
 
-    # Anything leftover (shouldn't happen with enough slots)
     for wtype, pool in pools.items():
         for w in pool:
             if w["wid"] not in target:
@@ -145,7 +202,7 @@ def main():
 
     # Summary
     print("\nLayout:")
-    for ws in sorted(WS_MAX):
+    for ws in sorted(ws_max):
         items = [w for w in windows if target.get(w["wid"]) == ws]
         if not items:
             continue
