@@ -233,6 +233,9 @@
           # Search Chrome windows by title
           "alt-s" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-chrome-search";
           
+          # Reload all Chrome tabs + Slack
+          "alt-shift-r" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-reload-windows";
+          
           # Help
           "alt-shift-slash" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-help";
         };
