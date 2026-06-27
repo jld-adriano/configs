@@ -15,7 +15,7 @@
   #   1 monitor:  VD1: 1      |  VD2: 2      |  VD3: 3      |  VD4: 4
   #
   # Keybindings:
-  #   alt-1/2/3       - Switch all monitors to Virtual Desktop 1/2/3
+  #   alt-1..0        - Switch to Virtual Desktop (1 monitor: direct workspace)
   #   alt-shift-1-9   - Move window to workspace 1-9 (see grid above)
   #   alt-h/j/k/l     - Focus window left/down/up/right (vim-style)
   #   alt-shift-h/j/k/l - Move window left/down/up/right
@@ -194,10 +194,18 @@
           # Virtual Desktops - adapts to 2 or 3 monitors
           # 3 monitors: VD1=1,2,3  VD2=4,5,6  VD3=7,8,9  VD4=10,11,12
           # 2 monitors: VD1=1,2    VD2=3,4    VD3=5,6    VD4=7,8
+          # On 1 monitor each maps directly to a workspace (alt-5 = WS5, etc.);
+          # on multi-monitor setups VD1-4 cover the lower workspaces.
           "alt-1" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 1";
           "alt-2" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 2";
           "alt-3" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 3";
           "alt-4" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 4";
+          "alt-5" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 5";
+          "alt-6" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 6";
+          "alt-7" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 7";
+          "alt-8" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 8";
+          "alt-9" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 9";
+          "alt-0" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-switch-vd 10";
           
           # Move window to workspace (workspaces numbered per VD × monitor count)
           # With 5 monitors: VD1=1-5, VD2=6-10, VD3=11-15, VD4=16-20
