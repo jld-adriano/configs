@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+
+# alt-shift-e: arrange ALL windows across the current VD's 5 workspaces.
+#   WS5 (last monitor) : main Slack window + 1 Chrome companion (reserved)
+#   WS3 (the "joker")  : catch-all for misc apps (anything not Chrome/Slack)
+#   WS1, WS2, WS4      : even round-robin of the rest (Chrome + non-main Slack)
+#
+# Tuned for the 5-monitors / 5-workspaces-per-VD layout. Workspaces are taken
+# relative to the current VD (so in VD1 they are literally WS1-5). The main
+# Slack window is identified by the "[Main]" suffix Slack appends to its
+# primary window title (falls back to the focused/first Slack window).
+# Usage: aero-distribute-slack
+
+MONITOR_COUNT=$(aerospace list-monitors | wc -l | tr -d ' ')
+
+# Determine current VD from the focused workspace
+FOCUSED_WS=$(aerospace list-workspaces --focused)
+CURRENT_VD=$(( (FOCUSED_WS - 1) / MONITOR_COUNT + 1 ))
+[ "$CURRENT_VD" -lt 1 ] && CURRENT_VD=1
+[ "$CURRENT_VD" -gt 4 ] && CURRENT_VD=1
+
+VD_BASE=$(( (CURRENT_VD - 1) * MONITOR_COUNT ))
+WS_MAIN=$(( VD_BASE + 5 ))    # main Slack + Chrome companion (reserved)
+WS_JOKER=$(( VD_BASE + 3 ))   # catch-all for misc apps
+SPREAD=( $(( VD_BASE + 1 )) $(( VD_BASE + 2 )) $(( VD_BASE + 4 )) )
+
+echo "VD $CURRENT_VD: main=WS$WS_MAIN joker=WS$WS_JOKER spread=WS(${SPREAD[*]})"
+
+# Focused window (fallback for picking the "main" Slack window)
+FOCUSED_WID=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
+FOCUSED_APP=$(aerospace list-windows --focused --format '%{app-name}' 2>/dev/null)
+
+# Collect windows by category. Slack tags its primary window with "[Main]".
+SLACK=()
+CHROME=()
+MISC=()
+MAIN_SLACK=""
+while IFS='|' read -r wid app title; do
+    wid=$(echo "$wid" | tr -d ' ')
+    app=$(echo "$app" | sed 's/^ *//; s/ *$//')
+    [ -z "$wid" ] && continue
+    case "$app" in
+        "Slack")
+            SLACK+=("$wid")
+            [[ "$title" == *"[Main]"* ]] && MAIN_SLACK="$wid"
+            ;;
+        "Google Chrome") CHROME+=("$wid") ;;
+        *) MISC+=("$wid") ;;
+    esac
+done < <(aerospace list-windows --all --format '%{window-id}|%{app-name}|%{window-title}' 2>/dev/null)
+
+# Pick the main Slack window: "[Main]" tag, else focused Slack, else first Slack
+if [ -z "$MAIN_SLACK" ] && [ "$FOCUSED_APP" = "Slack" ] && [ -n "$FOCUSED_WID" ]; then
+    MAIN_SLACK="$FOCUSED_WID"
+fi
+[ -z "$MAIN_SLACK" ] && [ "${#SLACK[@]}" -gt 0 ] && MAIN_SLACK="${SLACK[0]}"
+
+# Chrome companion = first Chrome window (sits on WS5 next to main Slack)
+COMPANION=""
+[ "${#CHROME[@]}" -gt 0 ] && COMPANION="${CHROME[0]}"
+
+# "Normal" spread pool: every non-main Slack + every non-companion Chrome
+NORMAL=()
+for wid in "${SLACK[@]}"; do
+    [ "$wid" != "$MAIN_SLACK" ] && NORMAL+=("$wid")
+done
+for wid in "${CHROME[@]}"; do
+    [ "$wid" != "$COMPANION" ] && NORMAL+=("$wid")
+done
+
+echo "main=$MAIN_SLACK companion=$COMPANION normal=${#NORMAL[@]} misc=${#MISC[@]}"
+
+# WS5: main Slack window + Chrome companion
+[ -n "$MAIN_SLACK" ] && aerospace move-node-to-workspace --window-id "$MAIN_SLACK" "$WS_MAIN" 2>/dev/null
+[ -n "$COMPANION" ] && aerospace move-node-to-workspace --window-id "$COMPANION" "$WS_MAIN" 2>/dev/null
+sleep 0.05
+
+# WS3 (joker): all misc apps (not Chrome, not Slack)
+for wid in "${MISC[@]}"; do
+    aerospace move-node-to-workspace --window-id "$wid" "$WS_JOKER" 2>/dev/null
+    sleep 0.05
+done
+
+# WS1 / WS2 / WS4: round-robin the normal pool
+SPREAD_N=${#SPREAD[@]}
+for ((i=0; i<${#NORMAL[@]}; i++)); do
+    TARGET_WS=${SPREAD[$(( i % SPREAD_N ))]}
+    aerospace move-node-to-workspace --window-id "${NORMAL[$i]}" "$TARGET_WS" 2>/dev/null
+    sleep 0.05
+done
+
+# Refresh all displays for the current VD
+~/projs/configs/home-manager/scripts/aero-switch-vd "$CURRENT_VD"
+
+# Flatten + balance each workspace so windows tile and are all visible
+for ((i=1; i<=MONITOR_COUNT; i++)); do
+    aerospace focus-monitor "$i" 2>/dev/null
+    sleep 0.1
+    aerospace flatten-workspace-tree 2>/dev/null
+    aerospace layout h_tiles 2>/dev/null
+    aerospace balance-sizes 2>/dev/null
+done
+
+aerospace focus-monitor 1
+
+echo "Done! Arranged windows in VD$CURRENT_VD (main WS$WS_MAIN, joker WS$WS_JOKER)."

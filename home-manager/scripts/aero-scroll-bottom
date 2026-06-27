@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Scroll every Slack window to the most recent message.
+
+Slack doesn't expose scroll position to the Accessibility API, so there's no
+reliable way to detect which windows are already at the bottom and target only
+those (the unread count in titles is a channel-level badge, not a per-window
+scroll indicator). So this simply raises each Slack window in turn and sends
+the scroll-to-bottom keystrokes -- harmless on windows already at the bottom.
+
+Per Slack's keyboard docs, `End` jumps to the most recent message; `Cmd+Down`
+is sent first as a nudge to scroll the conversation down.
+"""
+
+import subprocess
+
+# key code 125 = Down arrow, 119 = End
+APPLESCRIPT = r'''
+if application "Slack" is running then
+    tell application "Slack" to activate
+    delay 0.2
+    tell application "System Events"
+        tell process "Slack"
+            repeat with i from 1 to (count of windows)
+                try
+                    perform action "AXRaise" of window i
+                    delay 0.15
+                    key code 125 using command down -- scroll conversation down
+                    key code 119 -- End: jump to most recent message
+                end try
+            end repeat
+        end tell
+    end tell
+end if
+'''
+
+
+def main():
+    subprocess.run(["osascript", "-e", APPLESCRIPT], timeout=60)
+    print("Scrolled Slack windows to bottom")
+
+
+if __name__ == "__main__":
+    main()
