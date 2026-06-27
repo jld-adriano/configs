@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""Reapply a saved window layout (aero-layout-apply), best-effort.
+
+Presents a native list picker (navigable with the arrow keys) of the saved
+states archived by aero-layout-lock, then reapplies the chosen one. Windows
+present in the snapshot are returned to their saved workspace, matched first by
+window-id (exact within a session) and then by normalized window title
+(survives app restarts where ids change). Windows that aren't in the snapshot
+are handed to aero-organize, which places them by app/URL while treating the
+matched windows as pinned to their saved workspaces.
+"""
+
+import json
+import os
+import re
+import subprocess
+from collections import defaultdict, deque
+
+CACHE = os.path.expanduser("~/.cache/aerospace-layout.json")
+HISTORY_DIR = os.path.expanduser("~/.local/state/aerospace/history")
+LOG_FILE = os.path.expanduser("~/.local/state/aerospace/lock-log.tsv")
+ORGANIZE = os.path.expanduser(
+    "~/projs/configs/home-manager/scripts/aero-organize")
+
+
+def run(cmd):
+    return subprocess.run(
+        cmd, shell=True, capture_output=True, text=True, timeout=30
+    ).stdout.strip()
+
+
+def notify(msg):
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "{msg}" with title "AeroSpace Layout"'],
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+# ── State selection ─────────────────────────────────────────────────────────
+
+def pretty_ts(name):
+    """layout-2026-06-26_09-26-17.json -> 2026-06-26 09:26:17"""
+    base = name
+    if base.startswith("layout-"):
+        base = base[len("layout-"):]
+    if base.endswith(".json"):
+        base = base[:-len(".json")]
+    try:
+        date, t = base.split("_")
+        return f"{date} {t.replace('-', ':')}"
+    except ValueError:
+        return base
+
+
+def load_state_index():
+    """Return [(name, label, path)] for archived states, most recent first."""
+    if not os.path.isdir(HISTORY_DIR):
+        return []
+
+    log_rows = {}
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE) as f:
+            for line in f.read().splitlines()[1:]:  # skip header
+                cols = line.split("\t")
+                if len(cols) >= 5:
+                    log_rows[cols[4]] = {"nwin": cols[1], "apps": cols[3]}
+
+    files = sorted(
+        (f for f in os.listdir(HISTORY_DIR)
+         if f.startswith("layout-") and f.endswith(".json")),
+        reverse=True,
+    )
+
+    states = []
+    for name in files:
+        path = os.path.join(HISTORY_DIR, name)
+        meta = log_rows.get(name)
+        if meta:
+            nwin, apps = meta["nwin"], meta["apps"]
+        else:
+            try:
+                with open(path) as f:
+                    d = json.load(f)
+                ws = d.get("windows", [])
+                nwin = str(len(ws))
+                counts = {}
+                for w in ws:
+                    counts[w["app"]] = counts.get(w["app"], 0) + 1
+                apps = ", ".join(f"{a}={n}" for a, n in
+                                 sorted(counts.items(), key=lambda kv: -kv[1]))
+            except Exception:
+                nwin, apps = "?", ""
+        if len(apps) > 60:
+            apps = apps[:57] + "..."
+        label = f"{pretty_ts(name)}  ·  {nwin} win  ·  {apps}"
+        states.append((name, label, path))
+    return states
+
+
+def pick_state(states):
+    """Show a native arrow-key list picker; return the chosen snapshot path."""
+    labels = [s[1] for s in states]
+    # Wrap in System Events + activate so the picker pops to the foreground
+    # focused, instead of opening behind the current window.
+    script = (
+        'on run argv\n'
+        '  tell application "System Events"\n'
+        '    activate\n'
+        '    set choice to choose from list argv '
+        'with title "Apply Layout" '
+        'with prompt "Select a saved state to reapply:" '
+        'default items {item 1 of argv} '
+        'OK button name "Apply" cancel button name "Cancel"\n'
+        '  end tell\n'
+        '  if choice is false then\n'
+        '    return "###CANCEL###"\n'
+        '  else\n'
+        '    return item 1 of choice\n'
+        '  end if\n'
+        'end run'
+    )
+    res = subprocess.run(
+        ["osascript", "-e", script] + labels,
+        capture_output=True, text=True, timeout=300,
+    ).stdout.strip()
+
+    if not res or res == "###CANCEL###":
+        return None
+    for _name, label, path in states:
+        if label == res:
+            return path
+    return None
+
+
+# ── Apply ───────────────────────────────────────────────────────────────────
+
+def normalize(app, title):
+    """Strip volatile parts of a title so the same window matches over time."""
+    t = title
+    t = re.sub(r"\s*[-–]\s*\d+\s+new items?", "", t)       # Slack unread counts
+    t = re.sub(r"\s*[-–]\s*High memory usage[^-–]*", "", t)  # Chrome warning
+    t = re.sub(r"\s*[-–]\s*Google Chrome.*$", "", t)        # Chrome suffix
+    t = t.replace("[Main]", "")                              # Slack main tag
+    t = re.sub(r"\s+", " ", t).strip()
+    return f"{app}::{t}"
+
+
+def get_windows():
+    windows = []
+    fmt = "%{window-id}|%{workspace}|%{app-name}|%{window-title}"
+    for line in run(f"aerospace list-windows --all --format '{fmt}'").splitlines():
+        parts = line.split("|", 3)
+        if len(parts) < 4:
+            continue
+        windows.append({
+            "wid": int(parts[0].strip()),
+            "ws": int(parts[1].strip()),
+            "app": parts[2].strip(),
+            "title": parts[3].strip(),
+        })
+    return windows
+
+
+FOCUSED_X_APPLESCRIPT = (
+    'tell application "System Events" to tell '
+    '(first process whose frontmost is true) to get value of attribute '
+    '"AXPosition" of (value of attribute "AXFocusedWindow")'
+)
+
+
+def focused_window_x():
+    """Read the x-coordinate of the currently focused window (via AX)."""
+    out = subprocess.run(
+        ["osascript", "-e", FOCUSED_X_APPLESCRIPT],
+        capture_output=True, text=True, timeout=10,
+    ).stdout.strip()
+    try:
+        return float(out.split(",")[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def x_of(wid):
+    run(f"aerospace focus --window-id {wid}")
+    return focused_window_x()
+
+
+def reorder_to_snapshot(snap_windows, pinned):
+    """Restore each workspace's left-to-right order to match the snapshot.
+
+    Uses real window x-positions as ground truth (AeroSpace's list order is
+    unreliable for visual position). For each multi-window workspace, the
+    target order is the snapshot windows sorted by their saved x. We flatten to
+    horizontal tiles, then bubble each window into place with `move left`,
+    re-reading positions after each move so it's deterministic regardless of
+    AeroSpace's tree quirks.
+    """
+    # Desired left-to-right wids per workspace, from saved x positions
+    desired_by_ws = {}
+    for e in snap_windows:
+        if e.get("x") is None:
+            continue
+        if pinned.get(e["wid"]) != e["ws"]:
+            continue  # only windows we actually placed back into this ws
+        desired_by_ws.setdefault(e["ws"], []).append(e)
+
+    reordered = 0
+    for ws, entries in desired_by_ws.items():
+        target = [e["wid"] for e in sorted(entries, key=lambda e: e["x"])]
+        if len(target) < 2:
+            continue
+
+        # flatten to a linear horizontal layout so `move left` is a clean
+        # adjacent swap (deterministic), letting us avoid re-reading positions
+        run(f"aerospace focus --window-id {target[0]}")
+        run("aerospace flatten-workspace-tree")
+        run("aerospace layout h_tiles")
+
+        # read current left-to-right order ONCE
+        xs = {w: (x_of(w) or 0.0) for w in target}
+        cur = sorted(target, key=lambda w: xs[w])
+        if cur == target:
+            continue  # already correct
+
+        # insertion sort via `move left`: for each target slot, pull the right
+        # window left into place (each move left = one adjacent swap)
+        for pos, wid in enumerate(target):
+            i = cur.index(wid)
+            if i <= pos:
+                continue
+            run(f"aerospace focus --window-id {wid}")
+            for _ in range(i - pos):
+                run("aerospace move left")
+            cur.pop(i)
+            cur.insert(pos, wid)
+        run("aerospace balance-sizes")
+        reordered += 1
+
+    if reordered:
+        print(f"  Reordered {reordered} workspace(s) to snapshot order")
+
+
+def apply_snapshot(snap, label):
+    notify(f"⏳ Applying layout {label}…")
+    snap_windows = snap.get("windows", [])
+    id_to_ws = {e["wid"]: e["ws"] for e in snap_windows}
+
+    current = get_windows()
+    current_ids = {w["wid"] for w in current}
+
+    pinned = {}
+
+    # Pass 1: exact window-id match (precise within a session)
+    for w in current:
+        if w["wid"] in id_to_ws:
+            pinned[w["wid"]] = id_to_ws[w["wid"]]
+
+    # Build a title pool from snapshot windows whose exact id is gone (the
+    # window was closed/reopened with a new id, e.g. after an app restart).
+    title_pool = defaultdict(deque)
+    for e in snap_windows:
+        if e["wid"] in current_ids:
+            continue
+        title_pool[normalize(e["app"], e["title"])].append(e["ws"])
+
+    # Pass 2: normalized-title fallback for windows not matched by id.
+    for w in current:
+        if w["wid"] in pinned:
+            continue
+        key = normalize(w["app"], w["title"])
+        if title_pool[key]:
+            pinned[w["wid"]] = title_pool[key].popleft()
+
+    leftover = [w for w in current if w["wid"] not in pinned]
+    print(f"Applying {label}: matched {len(pinned)} windows; "
+          f"{len(leftover)} leftover -> aero-organize")
+
+    # Delegate everything to aero-organize: it pins the matched windows to
+    # their saved workspaces and places the leftovers around them.
+    env = dict(os.environ)
+    env["AERO_PINNED"] = ",".join(f"{wid}:{ws}" for wid, ws in pinned.items())
+    subprocess.run([ORGANIZE], env=env, timeout=120)
+
+    # Restore each workspace's saved left-to-right order using real window
+    # x-positions (deterministic; see reorder_to_snapshot).
+    reorder_to_snapshot(snap_windows, pinned)
+
+    notify(f"Applied {label}: {len(pinned)} pinned, {len(leftover)} organized")
+
+
+def main():
+    states = load_state_index()
+    if states:
+        path = pick_state(states)
+        if path is None:
+            print("Cancelled")
+            return
+    elif os.path.exists(CACHE):
+        path = CACHE  # no history yet; fall back to the current snapshot
+    else:
+        print("No saved layout. Run aero-layout-lock (alt-shift-s) first.")
+        notify("No saved layout to apply")
+        return
+
+    with open(path) as f:
+        snap = json.load(f)
+    apply_snapshot(snap, pretty_ts(os.path.basename(path)))
+
+
+if __name__ == "__main__":
+    main()

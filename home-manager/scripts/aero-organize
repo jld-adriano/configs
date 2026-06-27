@@ -9,6 +9,7 @@ Config at the top defines the layout per monitor count. The script:
 4. Only moves windows that are in the wrong spot
 """
 
+import os
 import subprocess
 import re
 
@@ -157,8 +158,25 @@ def main():
         w["type"] = classify(w, chrome_urls)
         windows.append(w)
 
+    # Pinned windows (set by aero-layout-apply): fixed to a saved workspace,
+    # excluded from the placement pools but counted against ws capacity.
+    pinned = {}
+    for tok in os.environ.get("AERO_PINNED", "").split(","):
+        tok = tok.strip()
+        if not tok or ":" not in tok:
+            continue
+        wid_s, ws_s = tok.split(":", 1)
+        try:
+            pinned[int(wid_s)] = int(ws_s)
+        except ValueError:
+            pass
+    if pinned:
+        print(f"  pinned: {len(pinned)} (from saved layout)")
+
     by_type = {}
     for w in windows:
+        if w["wid"] in pinned:
+            continue
         by_type.setdefault(w["type"], []).append(w)
 
     for t in by_type:
@@ -167,6 +185,10 @@ def main():
     # Compute ideal placement
     target = {}
     ws_filled = {ws: 0 for ws in ws_max}
+    # Reserve capacity for pinned windows up front
+    for wid, pw in pinned.items():
+        target[wid] = pw
+        ws_filled[pw] = ws_filled.get(pw, 0) + 1
     pools = {t: list(ws) for t, ws in by_type.items()}
 
     for ws, wtype, cap in slots:

@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""Lock the current window layout as a snapshot (aero-layout-lock).
+
+Records each window's workspace keyed by window-id (plus app/title for the
+normalized-title fallback used by aero-layout-apply). For Chrome windows it
+also captures structured tab data: every tab's title/url and which tab is
+focused. Reapply later with aero-layout-apply.
+
+Each lock also archives a timestamped copy of the full snapshot under
+~/.local/state/aerospace/history/ and appends a one-line summary to
+~/.local/state/aerospace/lock-log.tsv, so past states can be inspected later.
+"""
+
+import datetime
+import json
+import os
+import re
+import subprocess
+
+CACHE = os.path.expanduser("~/.cache/aerospace-layout.json")
+HISTORY_DIR = os.path.expanduser("~/.local/state/aerospace/history")
+LOG_FILE = os.path.expanduser("~/.local/state/aerospace/lock-log.tsv")
+
+# Dump every Chrome window's tabs. Output per window:
+#   ###WIN###<TAB><active-tab-index>
+#   <tab title>|||<tab url>   (one line per tab, in order)
+CHROME_TABS_APPLESCRIPT = (
+    'tell application "Google Chrome"\n'
+    '  set out to ""\n'
+    '  repeat with w in windows\n'
+    '    set out to out & "###WIN###\t" & (active tab index of w) & linefeed\n'
+    '    repeat with t in (tabs of w)\n'
+    '      set tt to ""\n'
+    '      try\n'
+    '        set tt to title of t\n'
+    '      end try\n'
+    '      set tu to ""\n'
+    '      try\n'
+    '        set tu to URL of t\n'
+    '      end try\n'
+    '      set out to out & tt & "|||" & tu & linefeed\n'
+    '    end repeat\n'
+    '  end repeat\n'
+    '  return out\n'
+    'end tell'
+)
+
+
+def run(cmd):
+    return subprocess.run(
+        cmd, shell=True, capture_output=True, text=True, timeout=30
+    ).stdout.strip()
+
+
+def notify(msg):
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "{msg}" with title "AeroSpace Layout"'],
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def clean_title(title):
+    """Reduce an AeroSpace Chrome window title to its active tab title."""
+    t = re.sub(r"\s*-\s*Google Chrome.*$", "", title)
+    t = re.sub(r"\s*-\s*High memory usage.*$", "", t)
+    return t.strip()
+
+
+def get_chrome_windows():
+    """Return a list of Chrome windows with their tabs and the focused tab."""
+    if "running" not in run("pgrep -x 'Google Chrome' >/dev/null && echo running || true"):
+        return []
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", CHROME_TABS_APPLESCRIPT],
+            capture_output=True, text=True, timeout=60,
+        ).stdout
+    except Exception:
+        print("  Warning: Chrome AppleScript timed out; skipping tab capture")
+        return []
+
+    windows = []
+    cur = None
+    for line in out.split("\n"):
+        if line.startswith("###WIN###"):
+            if cur is not None:
+                windows.append(cur)
+            parts = line.split("\t")
+            try:
+                active = int(parts[1])
+            except (IndexError, ValueError):
+                active = 1
+            cur = {"active_index": active, "tabs": []}
+        elif cur is not None and "|||" in line:
+            title, url = line.split("|||", 1)
+            cur["tabs"].append({"title": title, "url": url})
+    if cur is not None:
+        windows.append(cur)
+
+    for w in windows:
+        idx = w["active_index"] - 1
+        w["active_tab"] = w["tabs"][idx] if 0 <= idx < len(w["tabs"]) else None
+    return windows
+
+
+def attach_chrome_tabs(windows):
+    """Attach tab data to each AeroSpace Chrome window by matching active tab title."""
+    chrome_wins = get_chrome_windows()
+    used = [False] * len(chrome_wins)
+    matched = 0
+
+    for w in windows:
+        if w["app"] != "Google Chrome":
+            continue
+        ct = clean_title(w["title"])
+        for j, cw in enumerate(chrome_wins):
+            if used[j]:
+                continue
+            at = (cw.get("active_tab") or {}).get("title", "")
+            if at and (at == ct or ct.startswith(at) or at.startswith(ct)):
+                used[j] = True
+                matched += 1
+                w["chrome"] = {
+                    "active_tab": cw.get("active_tab"),
+                    "tabs": cw["tabs"],
+                }
+                break
+    return matched
+
+
+def parse_slack(title):
+    """Derive structured fields from a Slack window title.
+
+    Slack exposes no URL via scripting or Accessibility (its web area's AXURL
+    is always empty because it's a single-page app), so the title is the only
+    reliable source. Examples:
+      "agents-agents (Channel) - Exa - 30 new items - Slack"
+      "agents-agents (Thread) - Exa - Slack"
+      "! Threads - Exa - 94 new items - Slack [Main]"
+    """
+    info = {"raw": title}
+
+    m = re.search(r"(\d+)\s+new items?", title)
+    info["unread"] = int(m.group(1)) if m else None
+
+    if "[Main]" in title:
+        info["kind"] = "main"
+    elif "(Thread)" in title:
+        info["kind"] = "thread"
+    elif "(Channel)" in title:
+        info["kind"] = "channel"
+    elif re.search(r"\((DM|Direct [Mm]essage)\)", title):
+        info["kind"] = "dm"
+    else:
+        info["kind"] = "view"
+
+    t = re.sub(r"\s*-\s*Slack(\s*\[Main\])?\s*$", "", title)   # trailing " - Slack [Main]"
+    t = re.sub(r"\s*-\s*\d+\s+new items?", "", t)              # unread counter
+    t = re.sub(r"\s*\((Channel|Thread|DM|Direct [Mm]essage)\)", "", t)  # type marker
+
+    parts = [p.strip() for p in t.split(" - ") if p.strip()]
+    if parts and parts[0].startswith("! "):
+        parts[0] = parts[0][2:].strip()
+
+    if len(parts) >= 2:
+        info["name"] = parts[0]
+        info["workspace"] = parts[-1]
+    elif parts:
+        info["name"] = parts[0]
+        info["workspace"] = None
+    else:
+        info["name"] = None
+        info["workspace"] = None
+    return info
+
+
+def attach_slack(windows):
+    """Attach structured Slack fields (from the title) to each Slack window."""
+    count = 0
+    for w in windows:
+        if w["app"] == "Slack":
+            w["slack"] = parse_slack(w["title"])
+            count += 1
+    return count
+
+
+FOCUSED_X_APPLESCRIPT = (
+    'tell application "System Events" to tell '
+    '(first process whose frontmost is true) to get value of attribute '
+    '"AXPosition" of (value of attribute "AXFocusedWindow")'
+)
+
+
+def focused_window_x():
+    """Read the x-coordinate of the currently focused window (via AX)."""
+    out = subprocess.run(
+        ["osascript", "-e", FOCUSED_X_APPLESCRIPT],
+        capture_output=True, text=True, timeout=10,
+    ).stdout.strip()
+    try:
+        return float(out.split(",")[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def capture_order(windows):
+    """Record each window's on-screen x so left-to-right order can be restored.
+
+    AeroSpace parks hidden-workspace windows off-screen, so the only reliable
+    way to read a window's real position is to focus it. We therefore focus
+    each window in multi-window workspaces, read its x, and restore the
+    originally focused window afterward. Single-window workspaces don't need an
+    order, so they're skipped. This is the slow part of locking (it focuses
+    windows), which is acceptable since locking is infrequent.
+    """
+    by_ws = {}
+    for w in windows:
+        by_ws.setdefault(w["ws"], []).append(w)
+
+    orig = run("aerospace list-windows --focused --format '%{window-id}'")
+    captured = 0
+    for ws, wins in by_ws.items():
+        if len(wins) < 2:
+            for w in wins:
+                w["x"] = None
+            continue
+        for w in wins:
+            run(f"aerospace focus --window-id {w['wid']}")
+            w["x"] = focused_window_x()
+            captured += 1
+    if orig:
+        run(f"aerospace focus --window-id {orig}")
+    return captured
+
+
+def capture_screenshots(windows, now):
+    """Screenshot each window (by CGWindowID) without focusing it.
+
+    AeroSpace window-ids are CGWindowIDs, so `screencapture -l<id>` grabs the
+    window image directly from the window server. Images are downscaled to keep
+    them small. Requires Screen Recording permission for the invoking process.
+    """
+    stamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+    shots_dir = os.path.join(HISTORY_DIR, "shots", f"layout-{stamp}")
+    os.makedirs(shots_dir, exist_ok=True)
+
+    count = 0
+    for w in windows:
+        path = os.path.join(shots_dir, f"{w['wid']}.jpg")
+        try:
+            subprocess.run(
+                ["screencapture", f"-l{w['wid']}", "-o", "-x", "-t", "jpg", path],
+                capture_output=True, timeout=15,
+            )
+        except Exception:
+            pass
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            # downscale to bound disk usage (max dimension 1200px)
+            subprocess.run(["sips", "-Z", "1200", path],
+                           capture_output=True, timeout=15)
+            w["screenshot"] = path
+            count += 1
+        else:
+            w["screenshot"] = None
+    return count
+
+
+def write_history(now, snap, windows, chrome_matched):
+    """Archive a timestamped snapshot and append a summary line to the log."""
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+    stamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+    hist_name = f"layout-{stamp}.json"
+    with open(os.path.join(HISTORY_DIR, hist_name), "w") as f:
+        json.dump(snap, f, indent=2)
+
+    counts = {}
+    for w in windows:
+        counts[w["app"]] = counts.get(w["app"], 0) + 1
+    apps = ", ".join(f"{a}={c}"
+                     for a, c in sorted(counts.items(), key=lambda kv: -kv[1]))
+
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    write_header = not os.path.exists(LOG_FILE)
+    with open(LOG_FILE, "a") as f:
+        if write_header:
+            f.write("timestamp\twindows\tchrome_with_tabs\tapp_counts\tsnapshot\n")
+        f.write(f"{now.isoformat()}\t{len(windows)}\t{chrome_matched}\t"
+                f"{apps}\t{hist_name}\n")
+
+    return hist_name
+
+
+def main():
+    monitor_count = len(run("aerospace list-monitors").splitlines()) or 1
+
+    focused_ws = run("aerospace list-workspaces --focused")
+    try:
+        vd = (int(focused_ws) - 1) // monitor_count + 1
+    except ValueError:
+        vd = 1
+
+    windows = []
+    # bundle-id before title since titles can contain "|"
+    fmt = "%{window-id}|%{workspace}|%{app-name}|%{app-bundle-id}|%{window-title}"
+    for line in run(f"aerospace list-windows --all --format '{fmt}'").splitlines():
+        parts = line.split("|", 4)
+        if len(parts) < 5:
+            continue
+        windows.append({
+            "wid": int(parts[0].strip()),
+            "ws": int(parts[1].strip()),
+            "app": parts[2].strip(),
+            "bundle_id": parts[3].strip(),
+            "title": parts[4].strip(),
+        })
+
+    now = datetime.datetime.now().astimezone()
+    notify(f"⏳ Locking {len(windows)} windows…")
+
+    chrome_matched = attach_chrome_tabs(windows)
+    slack_count = attach_slack(windows)
+    shot_count = capture_screenshots(windows, now)  # records w["screenshot"]
+    capture_order(windows)  # records w["x"] for windows in multi-window workspaces
+
+    snap = {
+        "locked_at": now.isoformat(),
+        "monitor_count": monitor_count,
+        "vd": vd,
+        "windows": windows,
+    }
+
+    # Current snapshot (what aero-layout-apply reads)
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+    with open(CACHE, "w") as f:
+        json.dump(snap, f, indent=2)
+
+    # Timestamped archive + summary log for later inspection
+    hist_name = write_history(now, snap, windows, chrome_matched)
+
+    print(f"Locked layout: {len(windows)} windows "
+          f"({chrome_matched} Chrome w/ tabs, {slack_count} Slack parsed, "
+          f"{shot_count} screenshots) -> {CACHE}")
+    print(f"Archived: {os.path.join(HISTORY_DIR, hist_name)}")
+    notify(f"Locked {len(windows)} windows "
+           f"({chrome_matched} Chrome, {slack_count} Slack, {shot_count} shots)")
+
+
+if __name__ == "__main__":
+    main()
