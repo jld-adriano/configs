@@ -49,11 +49,11 @@
       "age-plugin-se"
       "FelixKratz/formulae/borders"  # Window border highlighting
     ];
-    casks = [
-      "nikitabobko/tap/aerospace"
-    ];
+    # AeroSpace is managed by nix-darwin (services.aerospace) below; do NOT
+    # also install it via Homebrew, or the brew CLI shadows the nix one in
+    # PATH and causes a client/server version mismatch.
+    casks = [ ];
     taps = [
-      "nikitabobko/tap"
       "FelixKratz/formulae"
     ];
   };
@@ -152,6 +152,19 @@
         after-startup-command = [];
         # Disabled - was causing window movement issues when clicking
         # on-focused-monitor-changed = [ "move-mouse monitor-lazy-center" ];
+
+        # exec-and-forget scripts (alt-1/2, distribute, layout lock/apply, etc.)
+        # call the `aerospace` CLI. GUI apps don't get nix paths in PATH by
+        # default, so add the nix profile dirs here or those scripts can't find
+        # the binary. The \${PATH} below is AeroSpace's own env-var expansion,
+        # escaped so Nix passes it through literally.
+        exec = {
+          inherit-env-vars = true;
+          env-vars = {
+            PATH = "/run/current-system/sw/bin:/etc/profiles/per-user/joaoadriano/bin:/opt/homebrew/bin:/opt/homebrew/sbin:\${PATH}";
+          };
+        };
+
         mode.main.binding = {
           # Vim-style navigation between windows
           "alt-h" = "focus --boundaries-action wrap-around-the-workspace left";
@@ -168,8 +181,8 @@
           # Fullscreen
           "alt-f" = "fullscreen";
           
-          # Layout reset
-          "alt-shift-f" = ["flatten-workspace-tree" "layout tiles" "balance-sizes"];
+          # Layout reset - force horizontal tiles (undoes weird vertical splits)
+          "alt-shift-f" = ["flatten-workspace-tree" "layout h_tiles" "balance-sizes"];
           "alt-b" = "balance-sizes";
           
           # Virtual Desktops - adapts to 2 or 3 monitors

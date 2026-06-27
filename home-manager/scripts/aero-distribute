@@ -50,9 +50,9 @@ for ((i=1; i<=MONITOR_COUNT; i++)); do
     WS=$(( (CURRENT_VD - 1) * MONITOR_COUNT + i ))
     aerospace focus-monitor $i 2>/dev/null
     sleep 0.1
-    # Reset to tiles layout to make all windows visible (not stacked)
+    # Reset to horizontal tiles so all windows are visible side-by-side
     aerospace flatten-workspace-tree 2>/dev/null
-    aerospace layout tiles 2>/dev/null
+    aerospace layout h_tiles 2>/dev/null
     aerospace balance-sizes 2>/dev/null
 done
 
