@@ -48,5 +48,14 @@ MONITORS
   alt-. / alt-,      → Focus next/prev monitor
   alt-i              → Identify monitors
 
+APPS & ACTIONS
+  alt-shift-d        → Organize windows by app
+  alt-shift-e        → Arrange windows (WS5 Slack, WS3 misc, rest spread)
+  alt-shift-s        → Lock current layout (snapshot)
+  alt-shift-a        → Reapply locked layout (best-effort)
+  alt-s              → Search Chrome windows
+  alt-shift-r        → Reload Chrome tabs + Slack
+  alt-ctrl-j         → Scroll Slack windows to bottom
+
 \" with title \"AeroSpace Help\" buttons {\"OK\"} default button \"OK\""
 

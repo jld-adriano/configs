@@ -24,6 +24,9 @@
   #   alt-b           - Balance window sizes
   #   alt-period      - Focus next monitor
   #   alt-comma       - Focus previous monitor
+  #   alt-ctrl-j      - Scroll all Slack windows to most recent message
+  #   alt-shift-s     - Lock current window layout (snapshot)
+  #   alt-shift-a     - Reapply locked layout (best-effort; leftovers organized)
   #   alt-?           - Show this help
   #
   # =============================================================================
@@ -240,6 +243,13 @@
           # Distribute windows evenly across monitors
           "alt-ctrl-d" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-distribute";
           
+          # Arrange windows: WS5=main Slack+Chrome, WS3=misc apps, WS1/2/4=rest
+          "alt-shift-e" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-distribute-slack";
+          
+          # Lock current window layout / reapply it (leftovers go through organize)
+          "alt-shift-s" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-layout-lock";
+          "alt-shift-a" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-layout-apply";
+          
           # Organize windows by app (Chrome→1,2,4,5 Slack→3 Cursor→8 other→6,7,9,10)
           "alt-shift-d" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-organize";
           
@@ -248,6 +258,9 @@
           
           # Reload all Chrome tabs + Slack
           "alt-shift-r" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-reload-windows";
+          
+          # Scroll all Slack windows to the most recent message
+          "alt-ctrl-j" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-scroll-bottom";
           
           # Help
           "alt-shift-slash" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-help";
