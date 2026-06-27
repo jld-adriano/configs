@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# Set every workspace that has windows to the accordion layout (one window
+# prominent at a time, the rest collapsed to strips). alt-ctrl-f.
+# aerospace `layout` only acts on the focused workspace, so we focus one window
+# per workspace, flatten, then switch it to accordion, restoring focus after.
+
+orig=$(aerospace list-windows --focused --format '%{window-id}' 2>/dev/null)
+
+workspaces=$(aerospace list-windows --all --format '%{workspace}' 2>/dev/null | sort -un)
+
+count=0
+for ws in $workspaces; do
+    wid=$(aerospace list-windows --workspace "$ws" --format '%{window-id}' 2>/dev/null | head -1 | tr -d ' ')
+    [ -z "$wid" ] && continue
+    aerospace focus --window-id "$wid" 2>/dev/null
+    aerospace flatten-workspace-tree 2>/dev/null
+    aerospace layout accordion 2>/dev/null
+    count=$((count + 1))
+done
+
+[ -n "$orig" ] && aerospace focus --window-id "$orig" 2>/dev/null
+
+echo "Set $count workspace(s) to accordion"
