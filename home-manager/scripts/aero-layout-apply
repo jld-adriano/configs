@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from collections import defaultdict, deque
 
 CACHE = os.path.expanduser("~/.cache/aerospace-layout.json")
@@ -151,18 +152,80 @@ def normalize(app, title):
 
 def get_windows():
     windows = []
-    fmt = "%{window-id}|%{workspace}|%{app-name}|%{window-title}"
+    fmt = "%{window-id}|%{workspace}|%{app-name}|%{app-bundle-id}|%{window-title}"
     for line in run(f"aerospace list-windows --all --format '{fmt}'").splitlines():
-        parts = line.split("|", 3)
-        if len(parts) < 4:
+        parts = line.split("|", 4)
+        if len(parts) < 5:
             continue
         windows.append({
             "wid": int(parts[0].strip()),
             "ws": int(parts[1].strip()),
             "app": parts[2].strip(),
-            "title": parts[3].strip(),
+            "bundle_id": parts[3].strip(),
+            "title": parts[4].strip(),
         })
     return windows
+
+
+def clean_title(title):
+    """Reduce a Chrome window title to its active tab title."""
+    t = re.sub(r"\s*-\s*Google Chrome.*$", "", title)
+    t = re.sub(r"\s*-\s*High memory usage.*$", "", t)
+    return t.strip()
+
+
+CHROME_ACTIVE_APPLESCRIPT = (
+    'tell application "Google Chrome"\n'
+    '  set out to ""\n'
+    '  repeat with w in windows\n'
+    '    set t to active tab of w\n'
+    '    set tt to ""\n'
+    '    try\n'
+    '      set tt to title of t\n'
+    '    end try\n'
+    '    set tu to ""\n'
+    '    try\n'
+    '      set tu to URL of t\n'
+    '    end try\n'
+    '    set out to out & tt & "|||" & tu & linefeed\n'
+    '  end repeat\n'
+    '  return out\n'
+    'end tell'
+)
+
+
+def get_current_chrome_urls(current):
+    """Map each current Chrome window-id to its active tab URL (for matching)."""
+    if "running" not in run("pgrep -x 'Google Chrome' >/dev/null && echo running || true"):
+        return {}
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", CHROME_ACTIVE_APPLESCRIPT],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+    except Exception:
+        return {}
+
+    chrome_list = []
+    for line in out.split("\n"):
+        if "|||" in line:
+            title, url = line.split("|||", 1)
+            chrome_list.append((title.strip(), url.strip()))
+
+    res = {}
+    used = [False] * len(chrome_list)
+    for w in current:
+        if w["app"] != "Google Chrome":
+            continue
+        ct = clean_title(w["title"])
+        for j, (at, url) in enumerate(chrome_list):
+            if used[j] or not at:
+                continue
+            if at == ct or ct.startswith(at) or at.startswith(ct):
+                used[j] = True
+                res[w["wid"]] = url
+                break
+    return res
 
 
 FOCUSED_X_APPLESCRIPT = (
@@ -189,28 +252,28 @@ def x_of(wid):
     return focused_window_x()
 
 
-def reorder_to_snapshot(snap_windows, pinned):
+def reorder_to_snapshot(x_by_wid, pinned):
     """Restore each workspace's left-to-right order to match the snapshot.
 
     Uses real window x-positions as ground truth (AeroSpace's list order is
-    unreliable for visual position). For each multi-window workspace, the
-    target order is the snapshot windows sorted by their saved x. We flatten to
-    horizontal tiles, then bubble each window into place with `move left`,
-    re-reading positions after each move so it's deterministic regardless of
-    AeroSpace's tree quirks.
+    unreliable for visual position). `x_by_wid` maps each matched CURRENT
+    window-id to the x it had in the snapshot (so this works even when ids
+    changed after a reboot and matching fell back to URL/title). For each
+    multi-window workspace, the target order is the matched windows sorted by
+    that saved x. We flatten to horizontal tiles, then bubble each window into
+    place with `move left`, re-reading positions once.
     """
     # Desired left-to-right wids per workspace, from saved x positions
     desired_by_ws = {}
-    for e in snap_windows:
-        if e.get("x") is None:
+    for wid, ws in pinned.items():
+        x = x_by_wid.get(wid)
+        if x is None:
             continue
-        if pinned.get(e["wid"]) != e["ws"]:
-            continue  # only windows we actually placed back into this ws
-        desired_by_ws.setdefault(e["ws"], []).append(e)
+        desired_by_ws.setdefault(ws, []).append((wid, x))
 
     reordered = 0
-    for ws, entries in desired_by_ws.items():
-        target = [e["wid"] for e in sorted(entries, key=lambda e: e["x"])]
+    for ws, items in desired_by_ws.items():
+        target = [wid for wid, _ in sorted(items, key=lambda t: t[1])]
         if len(target) < 2:
             continue
 
@@ -244,40 +307,198 @@ def reorder_to_snapshot(snap_windows, pinned):
         print(f"  Reordered {reordered} workspace(s) to snapshot order")
 
 
+# ── Chrome window restore ────────────────────────────────────────────────────
+
+def _as_quote(s):
+    """Quote a Python string as an AppleScript string literal."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def confirm(msg):
+    """Show a native Skip/Reopen dialog; return True if the user picked Reopen."""
+    script = (
+        'tell application "System Events"\n'
+        '  activate\n'
+        f'  set r to button returned of (display dialog {_as_quote(msg)} '
+        'with title "Restore Chrome Windows" '
+        'buttons {"Skip", "Reopen"} default button "Reopen")\n'
+        '  return r\n'
+        'end tell'
+    )
+    out = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=300,
+    ).stdout.strip()
+    return out == "Reopen"
+
+
+def chrome_window_ids():
+    """Set of current AeroSpace window-ids belonging to Google Chrome."""
+    ids = set()
+    fmt = "%{window-id}|%{app-name}"
+    for line in run(f"aerospace list-windows --all --format '{fmt}'").splitlines():
+        p = line.split("|", 1)
+        if len(p) == 2 and p[1].strip() == "Google Chrome":
+            try:
+                ids.add(int(p[0].strip()))
+            except ValueError:
+                pass
+    return ids
+
+
+def create_chrome_window(urls, active_index):
+    """Open one Chrome window with the given tab URLs; return its new wid.
+
+    The new window's tabs are (re)created in order: the first URL reuses the
+    window's initial tab, the rest are appended. `active_index` (1-based) is the
+    tab that ends up focused. We diff AeroSpace's Chrome window-ids before and
+    after so we can hand the new window's id back for workspace placement.
+    """
+    urls = [u for u in urls if u]
+    if not urls:
+        return None
+    before = chrome_window_ids()
+
+    lines = [
+        'tell application "Google Chrome"',
+        '  activate',
+        '  set w to make new window',
+        f'  set URL of active tab of w to {_as_quote(urls[0])}',
+    ]
+    for u in urls[1:]:
+        lines.append(
+            '  make new tab at end of tabs of w '
+            f'with properties {{URL:{_as_quote(u)}}}')
+    ai = max(1, min(active_index, len(urls)))
+    lines.append(f'  set active tab index of w to {ai}')
+    lines.append('end tell')
+    subprocess.run(
+        ["osascript", "-e", "\n".join(lines)],
+        capture_output=True, text=True, timeout=60,
+    )
+
+    # Wait for AeroSpace to register the newly created window, then return its id.
+    for _ in range(20):
+        new = chrome_window_ids() - before
+        if new:
+            return next(iter(new))
+        time.sleep(0.15)
+    return None
+
+
+def restore_missing_chrome(snap_windows, used, pinned, x_by_wid):
+    """Recreate snapshot Chrome windows that no longer exist (opt-in).
+
+    A window is "missing" if no current window matched its snapshot entry across
+    all matching passes (``used[i]`` is False). After confirmation, each is
+    reopened with all its saved tabs and added to ``pinned``/``x_by_wid`` so the
+    later aero-organize + reorder steps place and order it like a matched window.
+    """
+    missing = [e for i, e in enumerate(snap_windows)
+               if not used[i] and e["app"] == "Google Chrome"
+               and (e.get("chrome") or {}).get("tabs")]
+    if not missing:
+        return 0
+    if not confirm(
+            f"{len(missing)} Chrome window(s) from this snapshot aren't open. "
+            "Reopen them with all their tabs and place them on their saved "
+            "workspaces?"):
+        print(f"  Skipped restoring {len(missing)} missing Chrome window(s)")
+        return 0
+
+    restored = 0
+    for e in missing:
+        tabs = e["chrome"]["tabs"]
+        active = (e.get("chrome") or {}).get("active_tab") or {}
+        active_index = 1
+        for idx, t in enumerate(tabs):
+            if active.get("url") and t.get("url") == active.get("url"):
+                active_index = idx + 1
+                break
+        newid = create_chrome_window(
+            [t.get("url", "") for t in tabs], active_index)
+        if newid is None:
+            continue
+        pinned[newid] = e["ws"]
+        x_by_wid[newid] = e.get("x")
+        restored += 1
+
+    if restored:
+        print(f"  Restored {restored} missing Chrome window(s)")
+    return restored
+
+
 def apply_snapshot(snap, label):
     notify(f"⏳ Applying layout {label}…")
     snap_windows = snap.get("windows", [])
-    id_to_ws = {e["wid"]: e["ws"] for e in snap_windows}
-
     current = get_windows()
-    current_ids = {w["wid"] for w in current}
 
-    pinned = {}
+    # Match each current window to a snapshot entry, best-effort, in order of
+    # decreasing reliability. window-id is a CGWindowID (only stable within a
+    # session); after a reboot/app-restart we fall back to Chrome tab URL, then
+    # bundle-id + normalized title.
+    used = [False] * len(snap_windows)
+    by_id = {}
+    for i, e in enumerate(snap_windows):
+        by_id.setdefault(e["wid"], i)
 
-    # Pass 1: exact window-id match (precise within a session)
+    matched = {}  # current window-id -> snapshot entry
+
+    # Pass 1: exact window-id (same session)
     for w in current:
-        if w["wid"] in id_to_ws:
-            pinned[w["wid"]] = id_to_ws[w["wid"]]
+        i = by_id.get(w["wid"])
+        if i is not None and not used[i]:
+            used[i] = True
+            matched[w["wid"]] = snap_windows[i]
 
-    # Build a title pool from snapshot windows whose exact id is gone (the
-    # window was closed/reopened with a new id, e.g. after an app restart).
+    # Pass 2: Chrome active-tab URL (survives reboots; ids change, URLs don't)
+    cur_urls = get_current_chrome_urls(current)
+    url_pool = defaultdict(deque)
+    for i, e in enumerate(snap_windows):
+        if used[i] or e["app"] != "Google Chrome":
+            continue
+        url = ((e.get("chrome") or {}).get("active_tab") or {}).get("url")
+        if url:
+            url_pool[url].append(i)
+    for w in current:
+        if w["wid"] in matched or w["app"] != "Google Chrome":
+            continue
+        url = cur_urls.get(w["wid"])
+        if url and url_pool.get(url):
+            i = url_pool[url].popleft()
+            used[i] = True
+            matched[w["wid"]] = snap_windows[i]
+
+    # Pass 3: bundle-id + normalized title (Slack threads, other apps)
     title_pool = defaultdict(deque)
-    for e in snap_windows:
-        if e["wid"] in current_ids:
+    for i, e in enumerate(snap_windows):
+        if used[i]:
             continue
-        title_pool[normalize(e["app"], e["title"])].append(e["ws"])
-
-    # Pass 2: normalized-title fallback for windows not matched by id.
+        key = (e.get("bundle_id", ""), normalize(e["app"], e["title"]))
+        title_pool[key].append(i)
     for w in current:
-        if w["wid"] in pinned:
+        if w["wid"] in matched:
             continue
-        key = normalize(w["app"], w["title"])
-        if title_pool[key]:
-            pinned[w["wid"]] = title_pool[key].popleft()
+        key = (w.get("bundle_id", ""), normalize(w["app"], w["title"]))
+        if title_pool.get(key):
+            i = title_pool[key].popleft()
+            used[i] = True
+            matched[w["wid"]] = snap_windows[i]
+
+    pinned = {wid: e["ws"] for wid, e in matched.items()}
+    x_by_wid = {wid: e.get("x") for wid, e in matched.items()}
+
+    # Optionally reopen Chrome windows that no longer exist (e.g. after a
+    # reboot). Recreated windows join `pinned`/`x_by_wid`, so the aero-organize
+    # and reorder steps below place and order them alongside the matched ones.
+    restored = restore_missing_chrome(snap_windows, used, pinned, x_by_wid)
 
     leftover = [w for w in current if w["wid"] not in pinned]
-    print(f"Applying {label}: matched {len(pinned)} windows; "
-          f"{len(leftover)} leftover -> aero-organize")
+    by_id_n = sum(1 for w in current if by_id.get(w["wid"]) is not None
+                  and matched.get(w["wid"]) is not None)
+    print(f"Applying {label}: matched {len(matched)} "
+          f"({by_id_n} by id, {len(matched) - by_id_n} by url/title); "
+          f"{restored} restored; {len(leftover)} leftover -> aero-organize")
 
     # Delegate everything to aero-organize: it pins the matched windows to
     # their saved workspaces and places the leftovers around them.
@@ -287,9 +508,10 @@ def apply_snapshot(snap, label):
 
     # Restore each workspace's saved left-to-right order using real window
     # x-positions (deterministic; see reorder_to_snapshot).
-    reorder_to_snapshot(snap_windows, pinned)
+    reorder_to_snapshot(x_by_wid, pinned)
 
-    notify(f"Applied {label}: {len(pinned)} pinned, {len(leftover)} organized")
+    notify(f"Applied {label}: {len(pinned)} pinned, {restored} reopened, "
+           f"{len(leftover)} organized")
 
 
 def main():
