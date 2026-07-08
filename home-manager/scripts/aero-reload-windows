@@ -5,9 +5,17 @@ Reloads window-by-window rather than in one big AppleScript call: with ~90
 heavy tabs a single reload loop exceeds a short timeout and aborts before
 doing anything, so each window gets its own call and a slow window can't kill
 the whole run.
+
+Windows are reloaded in small batches with a pause between them so the heavy
+Devin/Capy pages don't all rebuild their heaps at once (a full simultaneous
+reload spikes memory hard and can push the machine into swap thrash).
 """
 
 import subprocess
+import time
+
+BATCH_SIZE = 5
+BATCH_PAUSE_S = 3
 
 
 def osascript(script, timeout=30):
@@ -37,8 +45,13 @@ def main():
             timeout=20,
         )
         reloaded += 1
+        # Pause between batches (but not after the final window) to let each
+        # batch settle before the next starts reloading.
+        if reloaded % BATCH_SIZE == 0 and i < n:
+            time.sleep(BATCH_PAUSE_S)
 
-    print(f"Reloaded tabs across {reloaded} Chrome window(s)")
+    print(f"Reloaded tabs across {reloaded} Chrome window(s) "
+          f"in batches of {BATCH_SIZE}")
 
 
 if __name__ == "__main__":
