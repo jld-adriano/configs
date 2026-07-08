@@ -267,7 +267,7 @@
           # Search Chrome windows by title
           "alt-s" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-chrome-search";
           
-          # Reload all Chrome tabs + Slack
+          # Reload all Chrome tabs
           "alt-shift-r" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-reload-windows";
           
           # Scroll all Slack windows to the most recent message

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scroll every Slack window to the most recent message.
+"""Scroll every Slack window and Devin/Capy Chrome tab to the latest message.
 
 Slack doesn't expose scroll position to the Accessibility API, so there's no
 reliable way to detect which windows are already at the bottom and target only
@@ -9,12 +9,16 @@ the scroll-to-bottom keystrokes -- harmless on windows already at the bottom.
 
 Per Slack's keyboard docs, `End` jumps to the most recent message; `Cmd+Down`
 is sent first as a nudge to scroll the conversation down.
+
+Chrome agent tabs (Devin/Capy) are handled by the window-colors extension: it
+binds Cmd+Shift+9 to scroll every Devin/Capy tab (background tabs included),
+so we just activate Chrome and send that one shortcut.
 """
 
 import subprocess
 
 # key code 125 = Down arrow, 119 = End
-APPLESCRIPT = r'''
+SLACK_APPLESCRIPT = r'''
 if application "Slack" is running then
     tell application "Slack" to activate
     delay 0.2
@@ -33,10 +37,24 @@ if application "Slack" is running then
 end if
 '''
 
+# key code 25 = "9"; triggers the window-colors extension's
+# scroll-agents-bottom command, which scrolls all Devin/Capy tabs.
+CHROME_APPLESCRIPT = r'''
+if application "Google Chrome" is running then
+    tell application "Google Chrome" to activate
+    delay 0.3
+    tell application "System Events"
+        key code 25 using {command down, shift down}
+    end tell
+end if
+'''
+
 
 def main():
-    subprocess.run(["osascript", "-e", APPLESCRIPT], timeout=60)
+    subprocess.run(["osascript", "-e", SLACK_APPLESCRIPT], timeout=60)
     print("Scrolled Slack windows to bottom")
+    subprocess.run(["osascript", "-e", CHROME_APPLESCRIPT], timeout=30)
+    print("Triggered Devin/Capy tab scroll (window-colors extension)")
 
 
 if __name__ == "__main__":

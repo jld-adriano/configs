@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reload all Chrome windows and Slack."""
+"""Reload all Chrome tabs (Slack intentionally untouched)."""
 
 import subprocess
 
@@ -20,13 +20,4 @@ tell application "Google Chrome"
     end repeat
 end tell'""")
 
-# Reload Slack
-run("osascript -e 'tell application \"Slack\" to activate'")
-run("""osascript -e '
-tell application "System Events"
-    tell process "Slack"
-        keystroke "r" using command down
-    end tell
-end tell'""")
-
-print("Reloaded all Chrome tabs + Slack")
+print("Reloaded all Chrome tabs")
