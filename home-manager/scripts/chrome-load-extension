@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""Load an unpacked Chrome extension via UI automation (chrome-load-extension).
+
+Chrome exposes no CLI or AppleScript API for loading an unpacked extension, so
+this drives the chrome://extensions page through the macOS Accessibility API.
+Two quirks, learned the hard way, shape the whole approach:
+
+  * Synthetic AXPress does NOT register on Chrome's web-UI controls (the
+    "Developer mode" toggle, "Load unpacked" button). You must focus the
+    element and send a real Space/Return keystroke via System Events.
+  * With many windows open, keyboard focus slips between Chrome windows. So we
+    open a DEDICATED extensions window, focus it through AeroSpace by its
+    window-id (which is the CGWindowID), and re-verify that the Accessibility
+    front window is the Extensions page before acting.
+
+Chrome also writes the loaded-extension record to (Secure )Preferences a few
+seconds after the load commits, so registration is verified with a short retry
+loop rather than a single check.
+
+Usage:
+    chrome-load-extension /absolute/path/to/extension-dir
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+PREF_FILES = [
+    os.path.expanduser(
+        "~/Library/Application Support/Google/Chrome/Default/Secure Preferences"),
+    os.path.expanduser(
+        "~/Library/Application Support/Google/Chrome/Default/Preferences"),
+]
+
+
+def sh(cmd, timeout=30):
+    return subprocess.run(
+        cmd, shell=True, capture_output=True, text=True, timeout=timeout
+    ).stdout.strip()
+
+
+def osa(script, timeout=60):
+    return subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=timeout,
+    ).stdout.strip()
+
+
+def jxa(script, args=None, timeout=120):
+    return subprocess.run(
+        ["osascript", "-l", "JavaScript", "-e", script] + (args or []),
+        capture_output=True, text=True, timeout=timeout,
+    ).stdout.strip()
+
+
+# ── Registration check ───────────────────────────────────────────────────────
+
+def is_registered(ext_dir):
+    """True if Chrome's prefs already reference this unpacked extension dir."""
+    target = os.path.realpath(ext_dir)
+    for path in PREF_FILES:
+        if not os.path.exists(path):
+            continue
+        try:
+            data = json.load(open(path))
+        except (ValueError, OSError):
+            # Prefs mid-write / unparseable: fall back to a substring scan.
+            try:
+                if ext_dir in open(path, errors="ignore").read():
+                    return True
+            except OSError:
+                pass
+            continue
+        settings = (data.get("extensions") or {}).get("settings") or {}
+        for entry in settings.values():
+            p = entry.get("path", "")
+            if p and (p == ext_dir or os.path.realpath(p) == target):
+                return True
+    return False
+
+
+# ── Window plumbing ──────────────────────────────────────────────────────────
+
+def aero_chrome_ids():
+    """Set of AeroSpace window-ids (== CGWindowIDs) for Google Chrome."""
+    out = sh("aerospace list-windows --all --format '%{window-id}|%{app-name}'")
+    ids = set()
+    for line in out.splitlines():
+        parts = line.split("|", 1)
+        if len(parts) == 2 and parts[1].strip() == "Google Chrome":
+            ids.add(parts[0].strip())
+    return ids
+
+
+def extensions_window_id():
+    """AeroSpace window-id of a Chrome window titled 'Extensions', if any."""
+    out = sh("aerospace list-windows --all --format '%{window-id}|%{window-title}'")
+    for line in out.splitlines():
+        parts = line.split("|", 1)
+        if len(parts) == 2 and parts[1].strip().startswith("Extensions"):
+            return parts[0].strip()
+    return None
+
+
+def open_extensions_window():
+    """Open a dedicated chrome://extensions window; return its Chrome window id."""
+    return osa(
+        'tell application "Google Chrome"\n'
+        '  activate\n'
+        '  set w to make new window\n'
+        '  set URL of active tab of w to "chrome://extensions"\n'
+        '  return id of w\n'
+        'end tell'
+    ).strip()
+
+
+def close_chrome_window(chrome_id):
+    if not chrome_id:
+        return
+    osa(
+        'tell application "Google Chrome"\n'
+        '  try\n'
+        f'    close (every window whose id is {chrome_id})\n'
+        '  end try\n'
+        'end tell'
+    )
+
+
+AX_FRONT_TITLE = (
+    "function run(){var se=Application('System Events');"
+    "var p=se.processes.byName('Google Chrome');"
+    "try{return p.windows[0].title();}catch(e){return '';}}"
+)
+
+
+def ax_front_title():
+    return jxa(AX_FRONT_TITLE, timeout=30)
+
+
+def ensure_front(aero_id, tries=3):
+    """Focus the extensions window and confirm it's the AX front window."""
+    for _ in range(tries):
+        sh(f"aerospace focus --window-id {aero_id}")
+        time.sleep(0.8)
+        if ax_front_title().startswith("Extensions"):
+            return True
+    return False
+
+
+# ── The load flow (all AX work in one JXA pass) ──────────────────────────────
+# Mirrors the manual steps: verify front window, ensure Developer mode, press
+# "Load unpacked" (focus + Space, since AXPress is ignored), wait for the open
+# panel sheet, Cmd+Shift+G, type the path, Return to go, Return to Open. Tree
+# walks are capped (count>4000) because Devin session windows have huge AX trees.
+LOAD_JXA = r"""
+function run(argv) {
+  var path = argv[0];
+  var se = Application('System Events');
+  var proc = se.processes.byName('Google Chrome');
+  function frontTitle(){ try { return proc.windows[0].title(); } catch(e){ return ''; } }
+  if (frontTitle().indexOf('Extensions') !== 0) return 'ABORT_FOCUS';
+  function find(role, text){
+    var found=null, count=0;
+    (function walk(el){
+      if(found||count>4000) return; count++;
+      var r=''; try{r=el.role();}catch(e){}
+      if(r===role){
+        var lbl='';
+        ['title','description'].forEach(function(f){ try{var v=el[f](); if(v) lbl+=' '+v;}catch(e){} });
+        if(lbl.toLowerCase().indexOf(text.toLowerCase())>=0){ found=el; return; }
+      }
+      var kids=[]; try{kids=el.uiElements();}catch(e){}
+      for(var i=0;i<kids.length;i++){ if(found)break; walk(kids[i]); }
+    })(proc.windows[0]);
+    return found;
+  }
+  function sheetCount(){ try{ return proc.windows[0].sheets().length; }catch(e){ return 0; } }
+
+  var load = find('AXButton','Load unpacked');
+  if(!load){
+    var dev = find('AXCheckBox','Developer mode');
+    if(!dev) return 'NO_DEVMODE';
+    try{ dev.attributes.byName('AXFocused').value = true; }catch(e){}
+    delay(0.4); se.keyCode(49); delay(1.2);   // 49 = Space
+    load = find('AXButton','Load unpacked');
+    if(!load) return 'NO_LOAD_BTN';
+  }
+  try{ load.attributes.byName('AXFocused').value = true; }catch(e){ return 'FOCUS_FAIL'; }
+  delay(0.4); se.keyCode(49);                 // press Load unpacked
+
+  var haveSheet=false;
+  for(var t=0;t<10;t++){ delay(0.4); if(sheetCount()>=1){ haveSheet=true; break; } }
+  if(!haveSheet){                             // retry with Return
+    try{ load.attributes.byName('AXFocused').value = true; }catch(e){}
+    delay(0.3); se.keyCode(36);               // 36 = Return
+    for(var t2=0;t2<10;t2++){ delay(0.4); if(sheetCount()>=1){ haveSheet=true; break; } }
+  }
+  if(!haveSheet) return 'NO_DIALOG';
+
+  se.keystroke('g', {using:['command down','shift down']});  // go-to-folder
+  delay(0.9);
+  se.keystroke(path);
+  delay(0.7);
+  se.keyCode(36);                             // confirm the path
+  delay(1.6);
+  se.keyCode(36);                             // press default "Open"
+  for(var c=0;c<12;c++){ delay(0.4); if(sheetCount()===0) break; }
+  return 'OK';
+}
+"""
+
+
+def run_load_flow(aero_id, ext_dir, attempts=3):
+    """Focus + run the JXA load pass, retrying on focus slips / dialog misses."""
+    last = ""
+    for _ in range(attempts):
+        if not ensure_front(aero_id):
+            last = "FOCUS_LOST"
+            continue
+        last = jxa(LOAD_JXA, args=[ext_dir])
+        if last == "OK":
+            return "OK"
+        if last in ("ABORT_FOCUS", "NO_DIALOG", "FOCUS_FAIL", "FOCUS_LOST"):
+            time.sleep(1)
+            continue
+        return last  # NO_DEVMODE / NO_LOAD_BTN — retrying won't help
+    return last
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: chrome-load-extension /absolute/path/to/extension-dir")
+        return 2
+
+    ext_dir = os.path.abspath(os.path.expanduser(sys.argv[1]))
+    manifest = os.path.join(ext_dir, "manifest.json")
+    if not os.path.isdir(ext_dir):
+        print(f"error: not a directory: {ext_dir}")
+        return 1
+    if not os.path.exists(manifest):
+        print(f"error: no manifest.json in {ext_dir}")
+        return 1
+    try:
+        name = json.load(open(manifest)).get("name", "(unnamed)")
+    except (ValueError, OSError) as e:
+        print(f"error: could not parse manifest.json: {e}")
+        return 1
+
+    if is_registered(ext_dir):
+        print(f"'{name}' already loaded ({ext_dir})")
+        return 0
+
+    before = aero_chrome_ids()
+    chrome_id = open_extensions_window()
+    time.sleep(1.5)
+    new_ids = aero_chrome_ids() - before
+    aero_id = next(iter(new_ids), None) or extensions_window_id()
+    if not aero_id:
+        print("error: could not open/find the extensions window")
+        return 1
+
+    status = run_load_flow(aero_id, ext_dir)
+    if status != "OK":
+        shot = f"/tmp/chrome-load-extension-{int(time.time())}.png"
+        sh(f"screencapture -l{aero_id} -x -t png {shot}")
+        print(f"error: load flow failed ({status}); screenshot: {shot}")
+        return 1
+
+    ok = False
+    for _ in range(15):
+        if is_registered(ext_dir):
+            ok = True
+            break
+        time.sleep(1)
+    if not ok:
+        shot = f"/tmp/chrome-load-extension-{int(time.time())}.png"
+        sh(f"screencapture -l{aero_id} -x -t png {shot}")
+        print(f"error: '{name}' did not register after load; screenshot: {shot}")
+        return 1
+
+    close_chrome_window(chrome_id)
+    print(f"loaded '{name}' from {ext_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
