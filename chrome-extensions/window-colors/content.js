@@ -19,6 +19,19 @@
     return /app\.devin\.ai\/sessions\/[a-f0-9-]+/.test(window.location.href);
   }
 
+  // A Devin session page counts as "loaded" only once the URL has a session
+  // id AND the tab title carries a real session title. During the login/
+  // loading splash (and before the SPA hydrates session data) document.title
+  // is empty or just "Devin", so the HUD would otherwise render a bogus
+  // "Devin" placeholder banner.
+  function devinSessionLoaded() {
+    if (!isDevinSession()) return false;
+    const t = (document.title || "")
+      .replace(/\s*[-|·]\s*Devin.*$/i, "")
+      .trim();
+    return t !== "" && t.toLowerCase() !== "devin";
+  }
+
   function isCapyThread() {
     return /capy\.ai\/project\/[a-f0-9-]+\/thread\/[a-f0-9-]+/.test(
       window.location.href);
@@ -166,13 +179,17 @@
     // down the heartbeat -- the registry slot matters more than the payload.
     let report;
     try {
+      // Pre-load Devin tabs still heartbeat (to hold the color slot) but must
+      // not report the bare app name as a session title.
+      const devinLoaded = devinSessionLoaded();
       report = {
         url: location.href,
         title: document.title,
         kind: isDevinSession() ? "devin" : "capy",
         awaiting: isAwaiting(),
         hudHidden,
-        sessionTitle: isDevinSession() ? getSessionTitle() : null,
+        loaded: isDevinSession() ? devinLoaded : true,
+        sessionTitle: isDevinSession() && devinLoaded ? getSessionTitle() : null,
         prs: isDevinSession() ? [...collectPRs().entries()] : [],
         color: currentColor(),
         symbol: currentSymbol(),
@@ -491,6 +508,18 @@
     if (isDevinSession()) {
       const badge = document.getElementById("wc-badge");
       if (badge) badge.remove();
+      if (!devinSessionLoaded()) {
+        // Still on the login/loading splash: render nothing (no banner, no
+        // awaiting line) until the session hydrates. tick() runs on a timer
+        // and DOM mutations, so the HUD appears as soon as the title does.
+        for (const id of ["wc-banner", "wc-await-border"]) {
+          const el = document.getElementById(id);
+          if (el) el.remove();
+        }
+        lastBannerState = "";
+        syncBannerOffset();
+        return;
+      }
       updateBanner();
     } else if (isCapyThread()) {
       const banner = document.getElementById("wc-banner");
