@@ -267,15 +267,31 @@
   ];
 
   function isAwaiting() {
-    const text = document.body ? document.body.innerText : "";
-    return AWAIT_PATTERNS.some((p) => p.test(text));
+    if (!document.body) return false;
+    // Check BOTH innerText and textContent: innerText excludes text hidden via
+    // visibility/display (Devin blinks its status element with a CSS
+    // animation, so innerText samples flicker), while textContent includes
+    // hidden text. textContent may also match hidden templates/tooltips --
+    // acceptable, since the phrase list is specific.
+    const rendered = document.body.innerText || "";
+    const full = document.body.textContent || "";
+    return AWAIT_PATTERNS.some((p) => p.test(rendered) || p.test(full));
   }
 
-  let lastAwaiting = null;
+  // Hysteresis: isAwaiting() reads document.body.innerText, which can briefly
+  // drop the awaiting phrase while the SPA re-renders, making the border flash.
+  // Turn the border on immediately, but only remove it after several
+  // consecutive non-awaiting evaluations.
+  const AWAIT_OFF_TICKS = 3;
+  let awaitMissCount = 0;
+  let lastAwaiting = null; // stabilized state
 
   function updateAwaitBorder() {
     let border = document.getElementById("wc-await-border");
-    const awaiting = isAwaiting();
+    const raw = isAwaiting();
+    awaitMissCount = raw ? 0 : awaitMissCount + 1;
+    const awaiting =
+      raw || (lastAwaiting === true && awaitMissCount < AWAIT_OFF_TICKS);
     if (lastAwaiting !== null && awaiting !== lastAwaiting) {
       heartbeat(); // push the state flip to the sink promptly
     }
