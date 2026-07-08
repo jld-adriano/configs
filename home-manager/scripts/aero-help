@@ -57,7 +57,7 @@ APPS & ACTIONS
   alt-s              → Search Chrome windows
   alt-shift-m        → Chrome tabs by memory (JS heap)
   alt-shift-r        → Reload Chrome tabs
-  alt-ctrl-j         → Scroll Slack + Devin/Capy to bottom
+  alt-ctrl-j         → Scroll Devin/Capy Chrome tabs to bottom
 
 \" with title \"AeroSpace Help\" buttons {\"OK\"} default button \"OK\""
 

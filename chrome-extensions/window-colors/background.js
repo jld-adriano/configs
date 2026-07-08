@@ -1,5 +1,4 @@
-// Service worker: central color registry, dev auto-reload, and
-// scroll-to-bottom automation for agent tabs (Devin/Capy).
+// Service worker: central color registry and dev auto-reload.
 
 const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000; // free a color slot after this
 const GOLDEN_ANGLE = 137.508; // degrees; spreads hues maximally
@@ -236,38 +235,4 @@ injectIntoAllTabs().then((n) => {
 chrome.runtime.onInstalled.addListener((details) => {
   sinkEvent({ event: "installed", reason: details.reason, bootId: BOOT_ID });
   injectIntoAllTabs();
-});
-
-// ── Scroll agent tabs to bottom (Cmd+Shift+9) ───────────────────────────────
-// Works on background tabs too, so one trigger covers every workspace.
-
-const AGENT_URLS = ["app.devin.ai", "capy.ai"];
-
-function scrollPageToBottom() {
-  window.scrollTo(0, document.body.scrollHeight);
-  // SPAs usually scroll an inner container, not the window: push every
-  // scrollable element to its bottom.
-  for (const el of document.querySelectorAll("*")) {
-    if (el.scrollHeight > el.clientHeight + 10) el.scrollTop = el.scrollHeight;
-  }
-}
-
-async function scrollAgentTabs() {
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (!tab.id || !tab.url) continue;
-    if (!AGENT_URLS.some((h) => tab.url.includes(h))) continue;
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: scrollPageToBottom,
-      });
-    } catch (e) {
-      // tab may be discarded/unloadable -- ignore
-    }
-  }
-}
-
-chrome.commands.onCommand.addListener((command) => {
-  if (command === "scroll-agents-bottom") scrollAgentTabs();
 });

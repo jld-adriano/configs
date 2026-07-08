@@ -1,60 +1,73 @@
 #!/usr/bin/env python3
-"""Scroll every Slack window and Devin/Capy Chrome tab to the latest message.
+"""Scroll every Devin/Capy Chrome tab to the latest message.
 
-Slack doesn't expose scroll position to the Accessibility API, so there's no
-reliable way to detect which windows are already at the bottom and target only
-those (the unread count in titles is a channel-level badge, not a per-window
-scroll indicator). So this simply raises each Slack window in turn and sends
-the scroll-to-bottom keystrokes -- harmless on windows already at the bottom.
+Chrome windows whose ACTIVE tab is an agent chat (app.devin.ai or capy.ai)
+are raised in turn and sent the scroll-to-bottom keystrokes: `Cmd+Down` as a
+nudge to scroll the conversation down, then `End` to jump to the most recent
+message. Keystrokes go to the focused window, so each target window is
+brought to the front first (set index to 1), and the originally-frontmost
+Chrome window is restored at the end.
 
-Per Slack's keyboard docs, `End` jumps to the most recent message; `Cmd+Down`
-is sent first as a nudge to scroll the conversation down.
-
-Chrome agent tabs (Devin/Capy) are handled by the window-colors extension: it
-binds Cmd+Shift+9 to scroll every Devin/Capy tab (background tabs included),
-so we just activate Chrome and send that one shortcut.
+Per-window delays are kept short (~0.15s) since there can be ~40 Chrome
+windows, and the whole osascript run is bounded by a subprocess timeout so a
+wedged Chrome can't hang the keybinding.
 """
 
 import subprocess
 
-# key code 125 = Down arrow, 119 = End
-SLACK_APPLESCRIPT = r'''
-if application "Slack" is running then
-    tell application "Slack" to activate
-    delay 0.2
-    tell application "System Events"
-        tell process "Slack"
-            repeat with i from 1 to (count of windows)
-                try
-                    perform action "AXRaise" of window i
-                    delay 0.15
-                    key code 125 using command down -- scroll conversation down
-                    key code 119 -- End: jump to most recent message
-                end try
-            end repeat
-        end tell
-    end tell
-end if
-'''
-
-# key code 25 = "9"; triggers the window-colors extension's
-# scroll-agents-bottom command, which scrolls all Devin/Capy tabs.
+# key code 125 = Down arrow, 119 = End. Target windows are collected by
+# window id first, because raising windows reshuffles the index-based window
+# references AppleScript hands out during enumeration.
 CHROME_APPLESCRIPT = r'''
-if application "Google Chrome" is running then
-    tell application "Google Chrome" to activate
-    delay 0.3
-    tell application "System Events"
-        key code 25 using {command down, shift down}
-    end tell
-end if
+if application "Google Chrome" is not running then return "0"
+tell application "Google Chrome"
+    activate
+    delay 0.2
+    set origId to missing value
+    try
+        set origId to id of front window
+    end try
+    set targetIds to {}
+    repeat with w in windows
+        try
+            set u to URL of active tab of w
+            if u contains "app.devin.ai" or u contains "capy.ai" then
+                set end of targetIds to (id of w)
+            end if
+        end try
+    end repeat
+    repeat with wid in targetIds
+        try
+            set index of (window id wid) to 1
+            delay 0.15
+            tell application "System Events"
+                key code 125 using command down -- scroll conversation down
+                key code 119 -- End: jump to most recent message
+            end tell
+            delay 0.15
+        end try
+    end repeat
+    if origId is not missing value then
+        try
+            set index of (window id origId) to 1
+        end try
+    end if
+    return (count of targetIds) as text
+end tell
 '''
 
 
 def main():
-    subprocess.run(["osascript", "-e", SLACK_APPLESCRIPT], timeout=60)
-    print("Scrolled Slack windows to bottom")
-    subprocess.run(["osascript", "-e", CHROME_APPLESCRIPT], timeout=30)
-    print("Triggered Devin/Capy tab scroll (window-colors extension)")
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", CHROME_APPLESCRIPT],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        print("Chrome scroll timed out")
+        return
+    count = result.stdout.strip() or "0"
+    print(f"Scrolled {count} Devin/Capy Chrome window(s) to bottom")
 
 
 if __name__ == "__main__":

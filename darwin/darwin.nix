@@ -25,7 +25,7 @@
   #   alt-b           - Balance window sizes
   #   alt-period      - Focus next monitor
   #   alt-comma       - Focus previous monitor
-  #   alt-ctrl-j      - Scroll all Slack windows to most recent message
+  #   alt-ctrl-j      - Scroll Devin/Capy Chrome tabs to most recent message
   #   alt-shift-s     - Lock current window layout (snapshot)
   #   alt-shift-a     - Reapply locked layout (best-effort; leftovers organized)
   #   alt-?           - Show this help
