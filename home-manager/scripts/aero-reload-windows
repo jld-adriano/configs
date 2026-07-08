@@ -1,23 +1,46 @@
 #!/usr/bin/env python3
-"""Reload all Chrome tabs (Slack intentionally untouched)."""
+"""Reload all Chrome tabs (Slack intentionally untouched).
+
+Reloads window-by-window rather than in one big AppleScript call: with ~90
+heavy tabs a single reload loop exceeds a short timeout and aborts before
+doing anything, so each window gets its own call and a slow window can't kill
+the whole run.
+"""
 
 import subprocess
 
 
-def run(cmd):
-    return subprocess.run(
-        cmd, shell=True, capture_output=True, text=True, timeout=15
-    ).stdout.strip()
+def osascript(script, timeout=30):
+    try:
+        return subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=timeout,
+        ).stdout.strip()
+    except subprocess.TimeoutExpired:
+        return ""
 
 
-# Reload all Chrome tabs
-run("""osascript -e '
-tell application "Google Chrome"
-    repeat with w in every window
-        repeat with t in every tab of w
-            tell t to reload
-        end repeat
-    end repeat
-end tell'""")
+def main():
+    count = osascript(
+        'tell application "Google Chrome" to count of windows') or "0"
+    try:
+        n = int(count)
+    except ValueError:
+        n = 0
 
-print("Reloaded all Chrome tabs")
+    reloaded = 0
+    for i in range(1, n + 1):
+        # One call per window; per-window timeout so one heavy window can't
+        # starve the rest.
+        osascript(
+            f'tell application "Google Chrome" to tell window {i} '
+            'to repeat with t in tabs to (tell t to reload)',
+            timeout=20,
+        )
+        reloaded += 1
+
+    print(f"Reloaded tabs across {reloaded} Chrome window(s)")
+
+
+if __name__ == "__main__":
+    main()
