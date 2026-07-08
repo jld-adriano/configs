@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""Local sink for the devin-stream Chrome extension (launchd service).
+
+The extension captures live data from logged-in app.devin.ai tabs and POSTs it
+here. Every event is an envelope:
+
+    {
+      "source": "devin-stream",
+      "kind":   "net" | "discovery" | "session" | "event",
+      "sessionId": "<uuid or null>",
+      "tabId": <int>, "url": "...", "bootId": "...",
+      "data": { ...channel-specific payload... }
+    }
+
+We persist three things under ~/.local/state/devin-stream/ so the stream can be
+inspected and iterated on from outside the browser:
+
+  * events.jsonl          -- append-only log of every envelope (rotated at 50MB)
+  * sessions/<id>.jsonl   -- per-session event log keyed by session id
+  * latest.json           -- aggregated snapshot: newest state per session plus
+                             the most recent discovery inventory
+
+Inspect with:
+
+    curl -s 127.0.0.1:48292/state | jq .
+    tail -f ~/.local/state/devin-stream/events.jsonl
+    ls ~/.local/state/devin-stream/sessions/
+"""
+
+import json
+import os
+import re
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PORT = 48292
+STATE_DIR = os.path.expanduser("~/.local/state/devin-stream")
+SESSIONS_DIR = os.path.join(STATE_DIR, "sessions")
+LOG_FILE = os.path.join(STATE_DIR, "events.jsonl")
+LATEST_FILE = os.path.join(STATE_DIR, "latest.json")
+MAX_LOG_BYTES = 50 * 1024 * 1024
+MAX_SESSION_LOG_BYTES = 10 * 1024 * 1024
+
+# Filesystem-safe session id: Devin session ids are uuids, but be defensive so a
+# malformed id can never escape the sessions/ directory.
+SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]")
+
+# In-memory aggregate; also mirrored to latest.json on every write so a restart
+# can reload it.
+STATE = {"sessions": {}, "discovery": None, "updatedAt": None}
+
+
+def _rotate(path, limit):
+    try:
+        if os.path.getsize(path) > limit:
+            os.replace(path, path + ".old")
+    except OSError:
+        pass
+
+
+def _safe_session_id(sid):
+    if not sid or not isinstance(sid, str):
+        return None
+    sid = SAFE_ID.sub("_", sid)[:128]
+    return sid or None
+
+
+def _load_latest():
+    try:
+        with open(LATEST_FILE) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            STATE.update({k: data.get(k, STATE[k]) for k in STATE})
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
+def _write_latest():
+    tmp = LATEST_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(STATE, f, indent=2, default=str)
+    os.replace(tmp, LATEST_FILE)
+
+
+def _apply(record):
+    """Fold one envelope into the aggregated snapshot + per-session logs."""
+    STATE["updatedAt"] = record["ts"]
+    kind = record.get("kind")
+
+    if kind == "discovery":
+        STATE["discovery"] = record
+        return
+
+    sid = _safe_session_id(record.get("sessionId"))
+    if sid is None:
+        return
+
+    sess = STATE["sessions"].get(sid) or {"sessionId": sid, "events": 0}
+    sess["events"] += 1
+    sess["lastSeen"] = record["ts"]
+    if record.get("url"):
+        sess["url"] = record["url"]
+    if record.get("tabId") is not None:
+        sess["tabId"] = record["tabId"]
+    # Merge channel-specific data so latest.json shows the freshest view.
+    data = record.get("data")
+    if isinstance(data, dict):
+        sess.setdefault("latest", {})
+        sess["latest"][kind or "event"] = data
+        for k in ("title", "status", "awaiting"):
+            if k in data:
+                sess[k] = data[k]
+    STATE["sessions"][sid] = sess
+
+    # Per-session append-only log.
+    path = os.path.join(SESSIONS_DIR, sid + ".jsonl")
+    _rotate(path, MAX_SESSION_LOG_BYTES)
+    with open(path, "a") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _respond(self, code, body):
+        data = json.dumps(body, default=str).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path != "/ingest":
+            return self._respond(404, {"error": "unknown path"})
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(length))
+        except (ValueError, json.JSONDecodeError):
+            return self._respond(400, {"error": "bad json"})
+
+        # Accept either a single envelope or a batch under "events".
+        events = payload.get("events") if isinstance(payload, dict) else None
+        if not isinstance(events, list):
+            events = [payload]
+
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        _rotate(LOG_FILE, MAX_LOG_BYTES)
+        n = 0
+        with open(LOG_FILE, "a") as f:
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+                record = {"ts": ts, **ev}
+                f.write(json.dumps(record, default=str) + "\n")
+                _apply(record)
+                n += 1
+        try:
+            _write_latest()
+        except OSError:
+            pass
+        self._respond(200, {"ok": True, "ingested": n})
+
+    def do_GET(self):
+        if self.path.startswith("/state"):
+            return self._respond(200, STATE)
+        return self._respond(404, {"error": "unknown path"})
+
+    def log_message(self, *args):
+        pass  # keep launchd logs quiet
+
+
+def main():
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    _load_latest()
+    HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
