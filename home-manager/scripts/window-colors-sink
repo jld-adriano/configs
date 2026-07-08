@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Local sink for the window-colors Chrome extension (launchd service).
+
+The extension's background worker POSTs its full state (per-tab determinations:
+stable key, color/symbol slot, awaiting-instructions verdict, extracted session
+title and PR list) to this server. We append every report to a JSONL log and
+keep the latest snapshot in latest.json, so extension behavior can be inspected
+from outside the browser:
+
+    cat ~/.local/state/window-colors/latest.json | jq .
+    tail -f ~/.local/state/window-colors/state.jsonl
+"""
+
+import json
+import os
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PORT = 48291
+STATE_DIR = os.path.expanduser("~/.local/state/window-colors")
+LOG_FILE = os.path.join(STATE_DIR, "state.jsonl")
+LATEST_FILE = os.path.join(STATE_DIR, "latest.json")
+MAX_LOG_BYTES = 50 * 1024 * 1024
+
+
+def rotate_if_huge():
+    try:
+        if os.path.getsize(LOG_FILE) > MAX_LOG_BYTES:
+            os.replace(LOG_FILE, LOG_FILE + ".old")
+    except OSError:
+        pass
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _respond(self, code, body):
+        data = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path != "/ingest":
+            return self._respond(404, {"error": "unknown path"})
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(length))
+        except (ValueError, json.JSONDecodeError):
+            return self._respond(400, {"error": "bad json"})
+
+        record = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **payload}
+        rotate_if_huge()
+        with open(LOG_FILE, "a") as f:
+            f.write(json.dumps(record) + "\n")
+        with open(LATEST_FILE, "w") as f:
+            json.dump(record, f, indent=2)
+        self._respond(200, {"ok": True})
+
+    def do_GET(self):
+        if self.path != "/state":
+            return self._respond(404, {"error": "unknown path"})
+        try:
+            with open(LATEST_FILE) as f:
+                self._respond(200, json.load(f))
+        except (OSError, json.JSONDecodeError):
+            self._respond(200, {})
+
+    def log_message(self, *args):
+        pass  # keep launchd logs quiet
+
+
+def main():
+    os.makedirs(STATE_DIR, exist_ok=True)
+    HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

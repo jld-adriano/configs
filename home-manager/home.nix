@@ -1041,4 +1041,22 @@ in {
 
   launchd.agents.home-manager-daemon = bunDaemonAgent "home-manager-daemon"
     "${config.home.homeDirectory}/projs/configs/nix-home-manager-daemon/";
+
+  # Local sink for the window-colors Chrome extension: receives per-tab state
+  # reports so extension behavior is inspectable outside the browser
+  # (~/.local/state/window-colors/).
+  launchd.agents.window-colors-sink = {
+    enable = true;
+    config = {
+      Label = "local.window-colors-sink";
+      ProgramArguments = [
+        "/usr/bin/python3"
+        "${config.home.homeDirectory}/projs/configs/home-manager/scripts/window-colors-sink"
+      ];
+      RunAtLoad = true;
+      KeepAlive = true;
+      StandardOutPath = "/tmp/window-colors-sink.out.log";
+      StandardErrorPath = "/tmp/window-colors-sink.err.log";
+    };
+  };
 }
