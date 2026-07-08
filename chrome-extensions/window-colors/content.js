@@ -230,29 +230,110 @@
 
   const MAX_PRS = 10;
 
-  function collectPRs() {
-    // Devin keeps this session's open tabs (including full PR metadata) in
-    // localStorage under `session-tabs:devin-<sessionId>` -- no DOM scraping
-    // needed. Only open, unmerged PRs are shown.
-    const prs = new Map(); // href -> label
+  // ── devin-stream summary (via the background worker) ─────────────────────
+  // The devin-stream sink (:48292) aggregates the captured Devin API traffic
+  // into a per-session summary: authoritative PR states plus the last
+  // human/agent chat messages. Content scripts can't reliably fetch localhost
+  // from an https page (private-network-access preflights), so the background
+  // worker fetches and caches it; we ask for our session's slice on the
+  // heartbeat cadence.
+  let streamSummary = null;
+
+  function refreshStreamSummary() {
+    if (!isDevinSession()) return;
+    try {
+      chrome.runtime.sendMessage(
+        { type: "stream-summary", sessionId: getStableKey() },
+        (resp) => {
+          if (chrome.runtime.lastError) return; // extension reloading
+          if (resp !== undefined) {
+            streamSummary = resp || null;
+            tick();
+          }
+        }
+      );
+    } catch (e) {
+      // extension context invalidated; keep the last cached summary
+    }
+  }
+
+  // Authoritative PR state by URL, from the captured Devin API data. Returns
+  // "open" | "merged" | "closed" | null (unknown).
+  function streamPrState(href) {
+    if (!streamSummary || !Array.isArray(streamSummary.prs)) return null;
+    for (const pr of streamSummary.prs) {
+      if (pr.url === href) {
+        if (pr.merged) return "merged";
+        return pr.state || null;
+      }
+    }
+    return null;
+  }
+
+  // Strict open-only predicate, applied identically to both PR sources:
+  // include ONLY records verifiably open (state literally "open", not merged,
+  // not draft). Unknown/missing state fails closed (excluded).
+  function isOpenPr(rec) {
+    return !!rec && rec.state === "open" && !rec.merged && !rec.draft;
+  }
+
+  // This session's localStorage tab snapshot (`session-tabs:devin-<id>`),
+  // as href -> record. NOTE these records are written when the PR tab is
+  // OPENED and never refreshed, so their `state` can be stale (a merged PR
+  // can still read state:"open" here) -- verified against the captured API
+  // data. Useful for titles; NOT trustworthy for state on its own.
+  function localTabPRs() {
+    const out = new Map();
     try {
       const sid = (location.href.match(
         /app\.devin\.ai\/sessions\/([a-f0-9-]+)/) || [])[1];
-      if (!sid) return prs;
+      if (!sid) return out;
       const raw = localStorage.getItem(`session-tabs:devin-${sid}`);
-      if (!raw) return prs;
+      if (!raw) return out;
       for (const tab of JSON.parse(raw).tabs || []) {
-        if (prs.size >= MAX_PRS) break;
         if (tab.type !== "pr" || !tab.data) continue;
         const d = tab.data;
-        if (d.state !== "open" || d.merged) continue;
         const href = d.html_url ||
           `https://github.com/${d.owner}/${d.repo}/pull/${d.pull_number}`;
-        const label = (d.title || `${d.repo}#${d.pull_number}`).trim();
-        prs.set(href, label);
+        out.set(href, d);
       }
     } catch (e) {
-      // malformed storage entry; show no PRs rather than wrong ones
+      // malformed storage entry; treat as no local records
+    }
+    return out;
+  }
+
+  function collectPRs() {
+    // Open PRs for this session, href -> label. Source of truth is the
+    // devin-stream summary (live Devin API captures: v2sessions /
+    // /sessions/<id>/prs carry authoritative state open|merged|closed).
+    // localStorage records only fill in titles, or act as the fallback
+    // source when the stream has no PR data for this session -- in which
+    // case any per-PR state the stream DOES know still overrides the
+    // stale local record.
+    const prs = new Map();
+    const local = localTabPRs();
+
+    if (streamSummary && Array.isArray(streamSummary.prs) &&
+        streamSummary.prs.length) {
+      for (const pr of streamSummary.prs) {
+        if (prs.size >= MAX_PRS) break;
+        if (!isOpenPr(pr) || !pr.url) continue;
+        const d = local.get(pr.url);
+        const label = (d && d.title) || pr.title ||
+          (pr.number ? `#${pr.number}` : pr.url);
+        prs.set(pr.url, String(label).trim());
+      }
+      return prs;
+    }
+
+    for (const [href, d] of local) {
+      if (prs.size >= MAX_PRS) break;
+      if (!isOpenPr(d)) continue;
+      const apiState = streamPrState(href);
+      if (apiState !== null && apiState !== "open") continue; // stale record
+      const label = (d.title || `${d.repo}#${d.pull_number}`).trim();
+      prs.set(href, label);
     }
     return prs;
   }
@@ -262,7 +343,10 @@
   function updateBanner() {
     const title = getSessionTitle();
     const prs = collectPRs();
-    const state = title + "|" + [...prs.keys()].join(",");
+    const lastHuman = (streamSummary && streamSummary.lastHumanMessage) || "";
+    const lastAgent = (streamSummary && streamSummary.lastAgentMessage) || "";
+    const state =
+      title + "|" + [...prs.keys()].join(",") + "|" + lastHuman + "|" + lastAgent;
     let banner = document.getElementById("wc-banner");
     if (banner && state === lastBannerState) return;
     lastBannerState = state;
@@ -283,6 +367,22 @@
     titleRow.appendChild(titleText);
     banner.appendChild(titleRow);
 
+    // Last chat messages (from the devin-stream captured-API summary): the
+    // most recent human message and the most recent agent CHAT message
+    // (reasoning/tool events are excluded sink-side).
+    if (lastHuman || lastAgent) {
+      const msgs = document.createElement("div");
+      msgs.id = "wc-banner-msgs";
+      for (const [icon, text] of [["👤", lastHuman], ["🤖", lastAgent]]) {
+        if (!text) continue;
+        const row = document.createElement("div");
+        row.className = "wc-banner-msg";
+        row.textContent = icon + " " + text;
+        msgs.appendChild(row);
+      }
+      banner.appendChild(msgs);
+    }
+
     if (prs.size) {
       const prRow = document.createElement("div");
       prRow.id = "wc-banner-prs";
@@ -298,6 +398,7 @@
     }
 
     document.documentElement.appendChild(banner);
+    syncBannerOffset();
   }
 
   // ── "Awaiting instructions" border ──────────────────────────────────────
@@ -328,8 +429,18 @@
   // Turn the border on immediately, but only remove it after several
   // consecutive non-awaiting evaluations.
   const AWAIT_OFF_TICKS = 3;
+  const AWAIT_LINE_PX = 32;
   let awaitMissCount = 0;
   let lastAwaiting = null; // stabilized state
+
+  // The awaiting line sits ABOVE the banner (both fixed at the top), so when
+  // it's visible the banner shifts down by the line's height.
+  function syncBannerOffset() {
+    const banner = document.getElementById("wc-banner");
+    if (!banner) return;
+    const line = document.getElementById("wc-await-border");
+    banner.style.top = line ? AWAIT_LINE_PX + "px" : "0px";
+  }
 
   function updateAwaitBorder() {
     let border = document.getElementById("wc-await-border");
@@ -348,17 +459,22 @@
         border.setAttribute("aria-hidden", "true");
         // Inline so it wins over any stale injected stylesheet: long-lived
         // tabs keep the style.css they loaded with (old pulse animation, old
-        // full-perimeter 18px border) and that copy wins the cascade over
-        // re-injected CSS, so the bottom-line geometry must be inline too.
+        // bottom-line geometry) and that copy wins the cascade over
+        // re-injected CSS, so geometry AND animation must be inline too (the
+        // @keyframes themselves live in style.css).
         border.style.cssText =
-          "position:fixed;left:0;right:0;bottom:0;top:auto;height:8px;" +
-          "border:0;background:rgba(255,106,0,0.85);box-sizing:border-box;" +
-          "z-index:2147483647;pointer-events:none;animation:none;";
+          "position:fixed;left:0;right:0;top:0;bottom:auto;" +
+          "height:" + AWAIT_LINE_PX + "px;border:0;" +
+          "background:linear-gradient(90deg,#ff6a00,#ffd27a,#ff6a00);" +
+          "background-size:200% 100%;box-sizing:border-box;" +
+          "z-index:2147483647;pointer-events:none;" +
+          "animation:wc-await-sweep 1.8s ease-in-out infinite alternate;";
         document.documentElement.appendChild(border);
       }
     } else if (border) {
       border.remove();
     }
+    syncBannerOffset();
   }
 
   function tick() {
@@ -391,6 +507,7 @@
 
   tick();
   heartbeat();
+  refreshStreamSummary();
 
   // SPA content updates in place, so re-evaluate on DOM changes and a timer.
   const observer = new MutationObserver(tick);
@@ -398,7 +515,10 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
   const tickTimer = setInterval(tick, 2000);
-  const hbTimer = setInterval(heartbeat, 30000);
+  const hbTimer = setInterval(() => {
+    heartbeat();
+    refreshStreamSummary();
+  }, 30000);
 
   window.__wcCleanup = function () {
     observer.disconnect();

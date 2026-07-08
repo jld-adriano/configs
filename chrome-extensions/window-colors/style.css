@@ -53,6 +53,24 @@
   line-height: 1;
 }
 
+/* Last human/agent chat messages (from the devin-stream summary) */
+#wc-banner-msgs {
+  margin-top: 3px;
+}
+
+.wc-banner-msg {
+  font-size: 10px;
+  font-weight: 500;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  line-height: 1.3;
+  /* ellipsize to ~2 lines each */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 #wc-banner-prs {
   display: flex;
   flex-wrap: wrap;
@@ -70,19 +88,29 @@
   white-space: nowrap;
 }
 
-/* Awaiting instructions: a line along the bottom edge (a full-perimeter
-   border proved too intrusive) */
+/* Awaiting instructions: an animated gradient line across the TOP of the
+   viewport, above the Devin banner (content.js shifts the banner down by the
+   line's height so they never overlap). Geometry and animation are duplicated
+   inline on the element to beat stale stylesheets in long-lived tabs; the
+   @keyframes live only here. */
 #wc-await-border {
   position: fixed;
-  /* inset/border set explicitly to beat the stale full-perimeter rule that
+  /* inset/border set explicitly to beat the stale bottom-line rule that
      older injected stylesheets may still carry in long-lived tabs */
-  inset: auto 0 0 0;
-  height: 8px;
+  inset: 0 0 auto 0;
+  height: 32px;
   border: 0;
-  background: rgba(255, 106, 0, 0.85);
+  background: linear-gradient(90deg, #ff6a00, #ffd27a, #ff6a00);
+  background-size: 200% 100%;
   box-sizing: border-box;
   z-index: 2147483647;
   pointer-events: none;
+  animation: wc-await-sweep 1.8s ease-in-out infinite alternate;
+}
+
+@keyframes wc-await-sweep {
+  from { background-position: 0% 50%; }
+  to   { background-position: 100% 50%; }
 }
 
 /* Always-visible dot to show/hide the HUD globally (bottom-right; top-right

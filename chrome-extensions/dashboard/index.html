@@ -23,6 +23,10 @@
     <div id="stats" class="stats"></div>
 
     <div class="controls">
+      <div class="view-tabs" id="view-tabs">
+        <button class="view-tab active" data-view="sessions">Sessions</button>
+        <button class="view-tab" data-view="prs">PRs</button>
+      </div>
       <div class="control-group">
         <span class="control-label">Group by</span>
         <select id="group-by">
@@ -44,11 +48,16 @@
         <input type="checkbox" id="awaiting-only">
         <span>Awaiting only</span>
       </label>
+      <label class="control-group toggle">
+        <input type="checkbox" id="open-prs-only" checked>
+        <span>Open PRs only</span>
+      </label>
       <input type="search" id="filter-text" placeholder="Filter by title / PR…">
     </div>
   </header>
 
   <main id="groups"></main>
+  <main id="prs-view" hidden></main>
 
   <section id="stream-panel" class="stream-panel">
     <h2>devin-stream <span id="stream-status" class="stream-status"></span></h2>

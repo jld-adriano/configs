@@ -66,7 +66,41 @@ function symbolForSlot(slot) {
 // within 30s of a worker restart.
 const tabReports = {};
 
+// ── devin-stream summary relay ──────────────────────────────────────────────
+// Content scripts can't reliably fetch 127.0.0.1 from an https page
+// (private-network-access preflights), so the worker fetches the devin-stream
+// sink's per-session summary and hands out cached per-session slices.
+
+const STREAM_SUMMARY_URL = "http://127.0.0.1:48292/summary";
+const STREAM_SUMMARY_TTL_MS = 25 * 1000;
+let streamSummaryCache = { sessions: {}, fetchedAt: 0 };
+
+async function getStreamSummary() {
+  if (Date.now() - streamSummaryCache.fetchedAt < STREAM_SUMMARY_TTL_MS) {
+    return streamSummaryCache.sessions;
+  }
+  try {
+    const res = await fetch(STREAM_SUMMARY_URL);
+    if (res.ok) {
+      const data = await res.json();
+      streamSummaryCache = {
+        sessions: (data && data.sessions) || {},
+        fetchedAt: Date.now(),
+      };
+    }
+  } catch (e) {
+    // sink not running; serve the stale cache (or {})
+  }
+  return streamSummaryCache.sessions;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "stream-summary") {
+    getStreamSummary().then((sessions) => {
+      sendResponse((msg.sessionId && sessions[msg.sessionId]) || null);
+    });
+    return true; // async response
+  }
   // Lightweight memory-only reports from NON-agent tabs (no registry slot);
   // stored alongside heartbeat reports so the sink's `tabs` array covers every
   // tab for the aero-tab-memory ranking.

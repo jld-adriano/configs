@@ -21,12 +21,13 @@ const STALE_MS = 90 * 1000;
 const state = {
   wc: null,        // window-colors snapshot
   wcError: null,
-  ds: null,        // devin-stream snapshot
+  ds: null,        // devin-stream snapshot (incl. per-session summary)
   dsError: null,
   layout: null,    // aerospace layout cache
   layoutError: null,
   lastWcAt: 0,
   lastDsAt: 0,
+  view: "sessions", // "sessions" | "prs"
 };
 
 const $ = (id) => document.getElementById(id);
@@ -147,6 +148,48 @@ function prNumber(href) {
   return m ? "#" + m[1] : "";
 }
 
+/* ---------------- PR assembly ---------------- */
+
+// Canonical PR list for a session. The devin-stream summary (captured Devin
+// API payloads) is the source of truth for PR STATES; window-colors tab
+// reports (localStorage-derived, open-only, but carrying PR titles) fill in
+// titles and act as the fallback when the stream hasn't seen the session.
+function sessionPRs(s) {
+  const wcLabels = new Map((s.prs || []).map(([href, label]) => [href, label]));
+  const summ = s.summary;
+  if (summ && Array.isArray(summ.prs) && summ.prs.length) {
+    return summ.prs.map((pr) => ({
+      url: pr.url,
+      number: pr.number || null,
+      title: pr.title || wcLabels.get(pr.url) || null,
+      // Fail closed: a missing/unknown state must NOT pass the open filter.
+      state: pr.merged ? "merged" : pr.state || "unknown",
+      draft: !!pr.draft,
+    }));
+  }
+  return (s.prs || []).map(([href, label]) => ({
+    url: href,
+    number: null,
+    title: label,
+    // window-colors reports only PRs that passed its strict open predicate
+    state: "open",
+    draft: false,
+  }));
+}
+
+function visiblePRs(s) {
+  const prs = sessionPRs(s);
+  if (!$("open-prs-only").checked) return prs;
+  // Same strict predicate as the window-colors banner: verifiably open only.
+  return prs.filter((pr) => pr.state === "open");
+}
+
+function prBadge(pr) {
+  const cls = { open: "pr-open", merged: "pr-merged", closed: "pr-closed" }[pr.state] || "pr-closed";
+  const label = pr.draft && pr.state === "open" ? "draft" : pr.state;
+  return `<span class="pr-state ${pr.draft && pr.state === "open" ? "pr-draft" : cls}">${esc(label)}</span>`;
+}
+
 /* ---------------- session assembly ---------------- */
 
 // Fold per-tab reports into one record per session key.
@@ -154,6 +197,7 @@ function buildSessions() {
   const tabs = (state.wc && state.wc.tabs) || [];
   const wsMap = buildWorkspaceMap();
   const dsSessions = (state.ds && state.ds.sessions) || {};
+  const dsSummary = (state.ds && state.ds.summary) || {};
   const byKey = new Map();
 
   for (const tab of tabs) {
@@ -195,7 +239,7 @@ function buildSessions() {
   }
 
   // Join devin-stream sessions (keyed by session uuid == window-colors key for
-  // devin tabs). Also surface stream-only sessions not seen by window-colors.
+  // devin tabs).
   for (const [sid, ds] of Object.entries(dsSessions)) {
     const s = byKey.get(sid);
     if (s) {
@@ -203,6 +247,36 @@ function buildSessions() {
       if (typeof ds.awaiting === "boolean") s.awaiting = s.awaiting || ds.awaiting;
       if (!s.title && ds.title) s.title = ds.title;
     }
+  }
+
+  // Join the per-session summaries (captured-API titles, PR states, last
+  // messages). The summary is the preferred source for session titles. Also
+  // surface summary-only sessions not seen by window-colors, so the PRs view
+  // covers everything the stream has tracked.
+  for (const [sid, summ] of Object.entries(dsSummary)) {
+    let s = byKey.get(sid);
+    if (!s) {
+      const ds = dsSessions[sid];
+      s = {
+        key: sid,
+        kind: "devin",
+        title: null,
+        url: (ds && ds.url) || `https://app.devin.ai/sessions/${sid}`,
+        color: null,
+        symbol: null,
+        slot: null,
+        awaiting: false,
+        prs: [],
+        tabCount: 0,
+        reportedAt: 0,
+        memBytes: null,
+        workspace: null,
+        stream: ds || null,
+      };
+      byKey.set(sid, s);
+    }
+    s.summary = summ;
+    if (summ.title) s.title = summ.title;
   }
 
   return [...byKey.values()];
@@ -223,7 +297,7 @@ function sortSessions(list, sortBy) {
     lastSeen: (a, b) => b.reportedAt - a.reportedAt,
     title: (a, b) => (a.title || "").localeCompare(b.title || ""),
     memory: (a, b) => (b.memBytes || 0) - (a.memBytes || 0),
-    prs: (a, b) => b.prs.length - a.prs.length,
+    prs: (a, b) => sessionPRs(b).length - sessionPRs(a).length,
   }[sortBy] || (() => 0);
   // Awaiting sessions always float to the top within their group.
   return list.sort((a, b) => (b.awaiting - a.awaiting) || cmp(a, b));
@@ -263,17 +337,29 @@ function renderCard(s) {
   meta.push(`<span class="badge badge-kind">${esc(s.kind)}</span>`);
 
   let prsHtml = "";
-  if (s.prs.length) {
-    const items = s.prs
+  const prs = visiblePRs(s);
+  if (prs.length) {
+    const items = prs
       .map(
-        ([href, label]) =>
-          `<li><a href="${esc(href)}" target="_blank" rel="noopener">` +
-          `<span class="pr-num">${esc(prNumber(href))}</span> ${esc(label)}</a></li>`
+        (pr) =>
+          `<li><a href="${esc(pr.url)}" target="_blank" rel="noopener">` +
+          `<span class="pr-num">${esc(prNumber(pr.url))}</span> ` +
+          `${esc(pr.title || pr.url)}</a> ${prBadge(pr)}</li>`
       )
       .join("");
     prsHtml =
-      `<details class="prs"><summary>${s.prs.length} PR${s.prs.length > 1 ? "s" : ""}</summary>` +
+      `<details class="prs"><summary>${prs.length} PR${prs.length > 1 ? "s" : ""}</summary>` +
       `<ul>${items}</ul></details>`;
+  }
+
+  let msgsHtml = "";
+  if (s.summary && (s.summary.lastHumanMessage || s.summary.lastAgentMessage)) {
+    const rows = [];
+    if (s.summary.lastHumanMessage)
+      rows.push(`<div class="last-msg">👤 ${esc(s.summary.lastHumanMessage)}</div>`);
+    if (s.summary.lastAgentMessage)
+      rows.push(`<div class="last-msg">🤖 ${esc(s.summary.lastAgentMessage)}</div>`);
+    msgsHtml = `<div class="last-msgs">${rows.join("")}</div>`;
   }
 
   let streamHtml = "";
@@ -299,6 +385,7 @@ function renderCard(s) {
     badge +
     `</div>` +
     `<div class="card-meta">${meta.join("")}</div>` +
+    msgsHtml +
     prsHtml +
     streamHtml +
     `</div>`
@@ -317,7 +404,7 @@ function renderGroups(sessions) {
     list = list.filter(
       (s) =>
         (s.title || "").toLowerCase().includes(q) ||
-        s.prs.some(([href, label]) => (label + " " + href).toLowerCase().includes(q))
+        sessionPRs(s).some((pr) => ((pr.title || "") + " " + pr.url).toLowerCase().includes(q))
     );
   }
 
@@ -356,6 +443,77 @@ function renderGroups(sessions) {
       );
     })
     .join("");
+}
+
+// Big flat list of every tracked PR, grouped by session. Sessions come from
+// the devin-stream summary first (authoritative states) with window-colors
+// tab reports as the fallback; the open-only toggle applies here too.
+function renderPrsView(sessions) {
+  const q = $("filter-text").value.trim().toLowerCase();
+  const openOnly = $("open-prs-only").checked;
+
+  const groups = [];
+  let totalShown = 0;
+  let totalAll = 0;
+  for (const s of sessions) {
+    const all = sessionPRs(s);
+    totalAll += all.length;
+    let prs = visiblePRs(s);
+    if (q) {
+      prs = prs.filter(
+        (pr) =>
+          ((pr.title || "") + " " + pr.url + " " + (s.title || ""))
+            .toLowerCase()
+            .includes(q)
+      );
+    }
+    if (!prs.length) continue;
+    totalShown += prs.length;
+    groups.push({ s, prs });
+  }
+
+  // Freshest sessions first (summary lastSeen, then extension report time).
+  groups.sort((a, b) => {
+    const at = String((a.s.summary && a.s.summary.lastSeen) || "");
+    const bt = String((b.s.summary && b.s.summary.lastSeen) || "");
+    return bt.localeCompare(at) || b.s.reportedAt - a.s.reportedAt;
+  });
+
+  if (!groups.length) {
+    $("prs-view").innerHTML =
+      `<div class="empty">No ${openOnly ? "open " : ""}PRs tracked` +
+      `${q ? " match the filter" : ""} (${totalAll} total across sessions).</div>`;
+    return;
+  }
+
+  $("prs-view").innerHTML =
+    `<div class="prs-total">${totalShown} PR${totalShown !== 1 ? "s" : ""}` +
+    `${openOnly ? " open" : ""} across ${groups.length} session${groups.length !== 1 ? "s" : ""}` +
+    ` · ${totalAll} tracked in total</div>` +
+    groups
+      .map(({ s, prs }) => {
+        const rows = prs
+          .map(
+            (pr) =>
+              `<li class="pr-row">` +
+              `<a href="${esc(pr.url)}" target="_blank" rel="noopener">` +
+              `<span class="pr-num">${esc(pr.number ? "#" + pr.number : prNumber(pr.url))}</span> ` +
+              `${esc(pr.title || pr.url.replace(/^https:\/\/github\.com\//, ""))}</a> ` +
+              prBadge(pr) +
+              `</li>`
+          )
+          .join("");
+        return (
+          `<section class="pr-group" style="--card-color:${esc(s.color || "transparent")}">` +
+          `<h2 class="pr-group-title">` +
+          `<span class="symbol">${esc(s.symbol || "")}</span>` +
+          `<a href="${esc(s.url)}" target="_blank" rel="noopener">` +
+          `${esc(s.title || s.key)}</a>` +
+          `<span class="count">${prs.length}</span>` +
+          `</h2><ul class="pr-list">${rows}</ul></section>`
+        );
+      })
+      .join("");
 }
 
 function renderStreamPanel() {
@@ -404,7 +562,10 @@ function render() {
 
   const sessions = buildSessions();
   renderStats(sessions);
-  renderGroups(sessions);
+  $("groups").hidden = state.view !== "sessions";
+  $("prs-view").hidden = state.view !== "prs";
+  if (state.view === "prs") renderPrsView(sessions);
+  else renderGroups(sessions);
   renderStreamPanel();
 
   const parts = [];
@@ -416,8 +577,18 @@ function render() {
 
 /* ---------------- boot ---------------- */
 
-for (const id of ["group-by", "sort-by", "awaiting-only", "filter-text"]) {
+for (const id of ["group-by", "sort-by", "awaiting-only", "open-prs-only", "filter-text"]) {
   $(id).addEventListener("input", render);
+}
+
+for (const btn of document.querySelectorAll("#view-tabs .view-tab")) {
+  btn.addEventListener("click", () => {
+    state.view = btn.dataset.view;
+    for (const b of document.querySelectorAll("#view-tabs .view-tab")) {
+      b.classList.toggle("active", b === btn);
+    }
+    render();
+  });
 }
 
 pollWc();
