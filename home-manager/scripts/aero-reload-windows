@@ -33,8 +33,7 @@ def main():
         # One call per window; per-window timeout so one heavy window can't
         # starve the rest.
         osascript(
-            f'tell application "Google Chrome" to tell window {i} '
-            'to repeat with t in tabs to (tell t to reload)',
+            f'tell application "Google Chrome" to reload every tab of window {i}',
             timeout=20,
         )
         reloaded += 1
