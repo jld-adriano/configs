@@ -20,9 +20,33 @@ inspected and iterated on from outside the browser:
   * latest.json           -- aggregated snapshot: newest state per session plus
                              the most recent discovery inventory
 
+On top of the raw capture we maintain a clean per-session SUMMARY, folded from
+the captured Devin API payloads as they arrive (and backfilled from
+events.jsonl on first start):
+
+    summary[sessionId] = {title, status, prs: [{number,title,url,state,merged,
+                          draft}], lastHumanMessage, lastAgentMessage, lastSeen}
+
+Payload sources (documented from captured traffic):
+  * GET .../v2sessions            -> result[]: devin_id, title, status,
+        pull_requests [{state, pr_url, draft}],
+        latest_message_contents / initial_user_message_contents
+        ({type: devin_message|user_message|initial_user_message, message, ts})
+  * GET /api/sessions/devin-<id>  -> same shape, single session
+  * GET /api/sessions/devin-<id>/prs -> [{pr_url, state, draft,
+        github_pr_data:{merged, number, title, ...}}] (bodies truncated at
+        24KB by the extension, so this is parsed with regexes)
+  * WS  /api/events/devin-<id>/live -> {type:"devin_event", devin_id,
+        event:{type, message, timestamp, ...}}. Chat messages are event types
+        devin_message (agent) and user_message/initial_user_message (human);
+        reasoning/tool types (devin_thoughts, one_line_thoughts,
+        thought_summary, shell_*, terminal_update, mcp_*, ...) are excluded,
+        as are streaming partials (ops frames without a full "message").
+
 Inspect with:
 
-    curl -s 127.0.0.1:48292/state | jq .
+    curl -s 127.0.0.1:48292/state | jq .      # full snapshot incl. summary
+    curl -s 127.0.0.1:48292/summary | jq .    # just the per-session summary
     tail -f ~/.local/state/devin-stream/events.jsonl
     ls ~/.local/state/devin-stream/sessions/
 """
@@ -31,6 +55,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = 48292
@@ -46,8 +71,9 @@ MAX_SESSION_LOG_BYTES = 10 * 1024 * 1024
 SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]")
 
 # In-memory aggregate; also mirrored to latest.json on every write so a restart
-# can reload it.
-STATE = {"sessions": {}, "discovery": None, "updatedAt": None}
+# can reload it. "summary" is the clean per-session view folded from the
+# captured Devin API payloads (see module docstring for the payload paths).
+STATE = {"sessions": {}, "discovery": None, "summary": {}, "updatedAt": None}
 
 
 def _rotate(path, limit):
@@ -82,6 +108,200 @@ def _write_latest():
     os.replace(tmp, LATEST_FILE)
 
 
+# ── Per-session summary (folded from captured Devin API payloads) ───────────
+
+MSG_TRUNC = 300
+HUMAN_MSG_TYPES = {"user_message", "initial_user_message"}
+AGENT_MSG_TYPES = {"devin_message"}
+
+# Trim sub-microsecond precision (WS events carry nanoseconds) so
+# datetime.fromisoformat can parse the timestamp.
+_FRAC = re.compile(r"(\.\d{6})\d+")
+_SESSION_API = re.compile(r"/api/sessions/devin-([0-9a-f]+)(/prs)?$")
+# /prs bodies are truncated at 24KB by the extension, so they can't be
+# json.loads'd; the leading fields of each item are extracted with a regex.
+_PR_ITEM = re.compile(
+    r'"pr_url"\s*:\s*"([^"]+)"\s*,\s*"state"\s*:\s*"(\w+)"\s*,\s*"draft"\s*:\s*(true|false)'
+)
+
+
+def _epoch(ts):
+    if not ts or not isinstance(ts, str):
+        return 0.0
+    try:
+        return datetime.fromisoformat(
+            _FRAC.sub(r"\1", ts.replace("Z", "+00:00"))
+        ).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _trunc_msg(text):
+    text = " ".join(str(text).split())
+    return text[:MSG_TRUNC] + ("…" if len(text) > MSG_TRUNC else "")
+
+
+def _summary_for(sid):
+    return STATE["summary"].setdefault(sid, {
+        "title": None, "status": None, "prs": [],
+        "lastHumanMessage": None, "lastHumanMessageAt": None,
+        "lastAgentMessage": None, "lastAgentMessageAt": None,
+        "lastSeen": None,
+    })
+
+
+def _sid_from_devin_id(devin_id):
+    if not isinstance(devin_id, str):
+        return None
+    if devin_id.startswith("devin-"):
+        devin_id = devin_id[len("devin-"):]
+    return _safe_session_id(devin_id)
+
+
+def _note_message(summ, contents, fallback_ts):
+    """Record a chat message if it's newer than the one we have.
+
+    Only full chat messages count: user_message/initial_user_message (human)
+    and devin_message (agent). Reasoning/tool event types (devin_thoughts,
+    one_line_thoughts, thought_summary, shell_*, terminal_update, mcp_*, ...)
+    are excluded, as are streaming partials (ops-frames carry no "message").
+    """
+    if not isinstance(contents, dict):
+        return
+    mtype = contents.get("type")
+    if mtype in HUMAN_MSG_TYPES:
+        key = "lastHumanMessage"
+    elif mtype in AGENT_MSG_TYPES:
+        key = "lastAgentMessage"
+    else:
+        return
+    text = contents.get("message")
+    if not isinstance(text, str) or not text.strip():
+        return
+    ts = contents.get("timestamp") or fallback_ts
+    if _epoch(ts) >= _epoch(summ.get(key + "At")):
+        summ[key] = _trunc_msg(text)
+        summ[key + "At"] = ts
+
+
+def _note_pr(summ, url, state=None, draft=None, merged=None):
+    if not url:
+        return
+    for pr in summ["prs"]:
+        if pr["url"] == url:
+            break
+    else:
+        num = re.search(r"/pull/(\d+)", url)
+        pr = {"number": int(num.group(1)) if num else None, "title": None,
+              "url": url, "state": None, "merged": False, "draft": False}
+        summ["prs"].append(pr)
+    if state is not None:
+        pr["state"] = state
+        pr["merged"] = (state == "merged") if merged is None else bool(merged)
+    elif merged is not None:
+        pr["merged"] = bool(merged)
+    if draft is not None:
+        pr["draft"] = bool(draft)
+
+
+def _fold_session_obj(obj, ts):
+    """Fold one session object from v2sessions / session-detail payloads."""
+    sid = _sid_from_devin_id(obj.get("devin_id"))
+    if not sid:
+        return
+    summ = _summary_for(sid)
+    summ["lastSeen"] = ts
+    if obj.get("title"):
+        summ["title"] = obj["title"]
+    if obj.get("status"):
+        summ["status"] = obj["status"]
+    for pr in obj.get("pull_requests") or []:
+        if isinstance(pr, dict):
+            _note_pr(summ, pr.get("pr_url"),
+                     state=pr.get("state"), draft=pr.get("draft"))
+    _note_message(summ, obj.get("initial_user_message_contents"), ts)
+    _note_message(summ, obj.get("latest_message_contents"), ts)
+
+
+def _fold_net(record):
+    """Fold one captured net envelope into the per-session summary."""
+    d = record.get("data")
+    if not isinstance(d, dict):
+        return
+    body = d.get("body")
+    if not isinstance(body, str) or not body:
+        return
+    ts = record.get("ts")
+
+    if d.get("channel") == "ws":
+        try:
+            frame = json.loads(body)
+        except ValueError:
+            return
+        if not isinstance(frame, dict) or frame.get("type") != "devin_event":
+            return
+        sid = _sid_from_devin_id(frame.get("devin_id"))
+        ev = frame.get("event")
+        if sid and isinstance(ev, dict):
+            summ = _summary_for(sid)
+            summ["lastSeen"] = ts
+            _note_message(summ, ev, ts)
+        return
+
+    url = (d.get("url") or "").split("?")[0]
+    if url.endswith("/v2sessions"):
+        try:
+            b = json.loads(body)
+        except ValueError:
+            return
+        if isinstance(b, dict):
+            for obj in b.get("result") or []:
+                if isinstance(obj, dict):
+                    _fold_session_obj(obj, ts)
+        return
+
+    m = _SESSION_API.search(url)
+    if not m:
+        return
+    if m.group(2):  # /prs endpoint (body usually truncated -> regex)
+        sid = _safe_session_id(m.group(1))
+        if not sid:
+            return
+        summ = _summary_for(sid)
+        summ["lastSeen"] = ts
+        for pm in _PR_ITEM.finditer(body):
+            _note_pr(summ, pm.group(1),
+                     state=pm.group(2), draft=pm.group(3) == "true")
+    else:  # single-session detail
+        try:
+            b = json.loads(body)
+        except ValueError:
+            return
+        if isinstance(b, dict) and b.get("devin_id"):
+            _fold_session_obj(b, ts)
+
+
+def _backfill_summary():
+    """Rebuild the summary from the retained event logs at startup.
+
+    Idempotent (newest-timestamp-wins), so re-folding on every boot is safe
+    and keeps the summary consistent with the current parse rules.
+    """
+    for path in (LOG_FILE + ".old", LOG_FILE):
+        try:
+            f = open(path)
+        except OSError:
+            continue
+        with f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except (ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(record, dict) and record.get("kind") == "net":
+                    _fold_net(record)
+
+
 def _apply(record):
     """Fold one envelope into the aggregated snapshot + per-session logs."""
     STATE["updatedAt"] = record["ts"]
@@ -90,6 +310,12 @@ def _apply(record):
     if kind == "discovery":
         STATE["discovery"] = record
         return
+
+    # The summary keys off ids inside the payloads (devin_id / URL), not the
+    # envelope's sessionId, so fold before the sessionId guard: org-wide
+    # endpoints like v2sessions describe many sessions at once.
+    if kind == "net":
+        _fold_net(record)
 
     sid = _safe_session_id(record.get("sessionId"))
     if sid is None:
@@ -170,6 +396,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/state"):
             return self._respond(200, STATE)
+        if self.path.startswith("/summary"):
+            return self._respond(200, {
+                "sessions": STATE["summary"],
+                "updatedAt": STATE["updatedAt"],
+            })
         return self._respond(404, {"error": "unknown path"})
 
     def log_message(self, *args):
@@ -179,6 +410,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     os.makedirs(SESSIONS_DIR, exist_ok=True)
     _load_latest()
+    STATE["summary"] = {}
+    _backfill_summary()
     HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
 
