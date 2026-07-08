@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Window Colors",
+  "version": "1.1",
+  "description": "Colored tab badges with centrally-assigned colors, plus an 'awaiting instructions' border and scroll-to-bottom automation",
+  "permissions": ["storage", "scripting", "tabs", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "scroll-agents-bottom": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+9",
+        "mac": "Command+Shift+9"
+      },
+      "description": "Scroll Devin/Capy tabs to bottom"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["style.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
