@@ -68,6 +68,22 @@ function symbolForSlot(slot) {
 const tabReports = {};
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Lightweight memory-only reports from NON-agent tabs (no registry slot);
+  // stored alongside heartbeat reports so the sink's `tabs` array covers every
+  // tab for the aero-tab-memory ranking.
+  if (msg && msg.type === "memreport") {
+    if (msg.report && sender.tab && sender.tab.id != null) {
+      tabReports[sender.tab.id] = {
+        ...msg.report,
+        kind: "page",
+        tabId: sender.tab.id,
+        windowId: sender.tab.windowId,
+        reportedAt: Date.now(),
+      };
+    }
+    sendResponse({});
+    return false;
+  }
   if (msg && msg.type === "heartbeat" && msg.key) {
     loadRegistry().then(() => {
       const slot = assignSlot(msg.key);
@@ -130,13 +146,20 @@ chrome.alarms.create("report-state", { periodInMinutes: 0.5 });
 
 const WATCH_FILES = ["manifest.json", "background.js", "content.js", "style.css"];
 
+const RELOAD_COOLDOWN_MS = 3 * 60 * 1000;
+
 async function fileFingerprint() {
+  // null = couldn't read everything; callers must skip the comparison. An
+  // empty/failed fetch (worker still initializing) once produced a bogus
+  // fingerprint here, which made every boot look "changed" -> reload loop.
   const parts = [];
   for (const f of WATCH_FILES) {
     try {
-      parts.push(await (await fetch(chrome.runtime.getURL(f))).text());
+      const t = await (await fetch(chrome.runtime.getURL(f))).text();
+      if (!t) return null;
+      parts.push(t);
     } catch (e) {
-      parts.push("");
+      return null;
     }
   }
   const s = parts.join("\u0000");
@@ -154,11 +177,18 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
   if (alarm.name !== "watch-files") return;
   const fp = await fileFingerprint();
-  const { fileFp } = await chrome.storage.local.get("fileFp");
+  if (fp === null) return; // unreadable this cycle; try again next tick
+  const { fileFp, lastReloadAt } = await chrome.storage.local.get(
+    ["fileFp", "lastReloadAt"]);
   if (fileFp === undefined) {
     await chrome.storage.local.set({ fileFp: fp });
   } else if (fileFp !== fp) {
-    await chrome.storage.local.set({ fileFp: fp });
+    if (lastReloadAt && Date.now() - lastReloadAt < RELOAD_COOLDOWN_MS) {
+      sinkEvent({ event: "reload-suppressed", bootId: BOOT_ID });
+      return; // cooldown: break potential reload loops
+    }
+    await chrome.storage.local.set({ fileFp: fp, lastReloadAt: Date.now() });
+    sinkEvent({ event: "reloading", bootId: BOOT_ID });
     chrome.runtime.reload();
   }
 });
@@ -170,18 +200,41 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 async function injectIntoAllTabs() {
   const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (!tab.id || !tab.url || !/^https?:/.test(tab.url)) continue;
+  const results = await Promise.all(tabs.map(async (tab) => {
+    if (!tab.id || !tab.url || !/^https?:/.test(tab.url)) return 0;
     try {
       await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["style.css"] });
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+      return 1;
     } catch (e) {
-      // chrome:// pages, PDF viewer, etc. -- ignore
+      return 0; // chrome:// pages, PDF viewer, etc.
     }
-  }
+  }));
+  return results.reduce((a, b) => a + b, 0);
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+// Fire-and-forget diagnostic events to the sink (visible in state.jsonl).
+function sinkEvent(payload) {
+  try {
+    fetch(SINK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "window-colors", ...payload }),
+    }).catch(() => {});
+  } catch (e) {}
+}
+
+// Run on every service-worker start, not just onInstalled: after
+// chrome.runtime.reload() the old content-script contexts are invalidated
+// (their heartbeats die silently), and relying on onInstalled alone proved
+// flaky. Re-injection is idempotent thanks to the __wcCleanup guard.
+const BOOT_ID = Date.now().toString(36);
+injectIntoAllTabs().then((n) => {
+  sinkEvent({ event: "worker-start", bootId: BOOT_ID, injected: n });
+});
+
+chrome.runtime.onInstalled.addListener((details) => {
+  sinkEvent({ event: "installed", reason: details.reason, bootId: BOOT_ID });
   injectIntoAllTabs();
 });
 

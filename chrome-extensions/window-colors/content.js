@@ -74,24 +74,68 @@
     );
   }
 
+  // Per-tab JS heap numbers for the memory ranking (aero-tab-memory).
+  // CAVEAT: performance.memory is per RENDERER PROCESS, and Chrome can host
+  // several same-site tabs (e.g. many app.devin.ai tabs) in one process, so
+  // tabs sharing a process report the same heap. Consumers detect that by
+  // grouping identical values; we just report what this context sees.
+  function memoryInfo() {
+    try {
+      const m = performance.memory;
+      if (!m) return {};
+      return {
+        jsHeapUsed: m.usedJSHeapSize,
+        jsHeapTotal: m.totalJSHeapSize,
+        jsHeapLimit: m.jsHeapSizeLimit,
+      };
+    } catch (e) {
+      return {};
+    }
+  }
+
   // Ask the background registry for this key's color+symbol; it heartbeats the
   // key so the slot stays reserved. Falls back to hash-derived values until
   // (or if ever) the registry responds. The report payload also carries this
   // tab's determinations so the background can forward them to the local sink
   // (window-colors-sink) for out-of-browser inspection.
   function heartbeat() {
-    if (!isDevinSession() && !isCapyThread()) return;
+    if (!isDevinSession() && !isCapyThread()) {
+      // Non-agent tabs still report a lightweight memory record on the same
+      // cadence, so aero-tab-memory can rank EVERY tab, not just Devin/Capy.
+      try {
+        chrome.runtime.sendMessage({
+          type: "memreport",
+          report: {
+            url: location.href,
+            title: document.title,
+            ...memoryInfo(),
+          },
+        }, () => { void chrome.runtime.lastError; });
+      } catch (e) {
+        // extension context invalidated (reloaded); page reload will fix it
+      }
+      return;
+    }
     const key = getStableKey();
-    const report = {
-      url: location.href,
-      kind: isDevinSession() ? "devin" : "capy",
-      awaiting: isAwaiting(),
-      sessionTitle: isDevinSession() ? getSessionTitle() : null,
-      prs: isDevinSession() ? [...collectPRs().entries()] : [],
-      prsDebug: isDevinSession() ? collectPRsDebug() : [],
-      color: currentColor(),
-      symbol: currentSymbol(),
-    };
+    // Defensive: report building touches the page DOM/storage, which can throw
+    // mid-load (null body, sandboxed frames). A failed report must never take
+    // down the heartbeat -- the registry slot matters more than the payload.
+    let report;
+    try {
+      report = {
+        url: location.href,
+        title: document.title,
+        kind: isDevinSession() ? "devin" : "capy",
+        awaiting: isAwaiting(),
+        sessionTitle: isDevinSession() ? getSessionTitle() : null,
+        prs: isDevinSession() ? [...collectPRs().entries()] : [],
+        color: currentColor(),
+        symbol: currentSymbol(),
+        ...memoryInfo(),
+      };
+    } catch (e) {
+      report = { url: location.href, reportError: String(e), ...memoryInfo() };
+    }
     try {
       chrome.runtime.sendMessage({ type: "heartbeat", key, report }, (resp) => {
         if (chrome.runtime.lastError) return; // extension reloading
@@ -140,90 +184,32 @@
   }
 
   const MAX_PRS = 10;
-  const TOP_BAR_PX = 160; // only trust elements in the session's top tab bar
-
-  function inTopBar(el) {
-    const r = el.getBoundingClientRect();
-    return r.top >= 0 && r.top < TOP_BAR_PX && r.height > 0 && r.height < 80;
-  }
 
   function collectPRs() {
-    // Only the current session's top tab bar counts: the sidebar/session list
-    // also renders "pr:NNNN" chips for OTHER sessions, so a whole-page scan
-    // would pick up hundreds of them.
+    // Devin keeps this session's open tabs (including full PR metadata) in
+    // localStorage under `session-tabs:devin-<sessionId>` -- no DOM scraping
+    // needed. Only open, unmerged PRs are shown.
     const prs = new Map(); // href -> label
-    for (const a of document.querySelectorAll('a[href*="github.com"]')) {
-      if (prs.size >= MAX_PRS) break;
-      const m = (a.href || "").match(
-        /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-      if (!m || !inTopBar(a)) continue;
-      // Prefer the PR title: use the anchor's own text when it reads like a
-      // title rather than a bare URL/number reference.
-      const text = (a.textContent || "").trim().replace(/\s+/g, " ");
-      const looksLikeTitle =
-        text.length > 8 && !/^https?:\/\//.test(text) &&
-        !/^#?\d+$/.test(text) && !/^pr[:#]?\s?\d+$/i.test(text);
-      prs.set(m[0], looksLikeTitle ? text : `${m[2]}#${m[3]}`);
-    }
-    // Devin's tab chips render as "pr:104487" text without hrefs; link those
-    // to the session's own PR tab so they're still one click away.
-    const seen = new Set([...prs.values()].map((l) => l.split("#")[1]));
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode()) && prs.size < MAX_PRS) {
-      const t = (node.textContent || "").trim();
-      const m = t.match(/^pr:\s?#?(\d{3,7})$/i); // exact chip text only
-      if (!m) continue;
-      const el = node.parentElement;
-      if (!el || !inTopBar(el)) continue;
-      const n = m[1];
-      if (seen.has(n)) continue;
-      seen.add(n);
-      // Chips carry no PR title in their text; check nearby tooltip attrs
-      // before falling back to the bare number.
-      let label = `pr:${n}`;
-      for (let p = el, hops = 0; p && hops < 3; p = p.parentElement, hops++) {
-        const tip = p.getAttribute("title") || p.getAttribute("aria-label");
-        if (tip && tip.trim().length > 8 && !/^pr[:#]?\s?\d+$/i.test(tip.trim())) {
-          label = tip.trim().replace(/\s+/g, " ");
-          break;
-        }
-      }
-      const href = location.origin + location.pathname + "?tab=pr%3A" + n;
-      prs.set(href, label);
-    }
-    return prs;
-  }
-
-  // TEMP DEBUG: survey the page's client-side storage (shared with content
-  // scripts) so we can find where Devin keeps structured PR/session data,
-  // instead of scraping the DOM. Shipped to the sink for inspection.
-  let idbNames = [];
-  try {
-    if (indexedDB.databases) {
-      indexedDB.databases().then((dbs) => {
-        idbNames = dbs.map((d) => `${d.name} v${d.version}`);
-      });
-    }
-  } catch (e) {}
-
-  function collectPRsDebug() {
-    const out = { localStorage: [], indexedDB: idbNames, samples: [] };
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        const v = localStorage.getItem(k) || "";
-        out.localStorage.push(`${k} (${v.length}b)`);
-        // sample values of keys that look session/PR related
-        if (out.samples.length < 6 &&
-            (/pr|pull|session|devin|tab/i.test(k) || /pull\/\d+|"pr"/.test(v))) {
-          out.samples.push({ key: k, value: v.slice(0, 900) });
-        }
+      const sid = (location.href.match(
+        /app\.devin\.ai\/sessions\/([a-f0-9-]+)/) || [])[1];
+      if (!sid) return prs;
+      const raw = localStorage.getItem(`session-tabs:devin-${sid}`);
+      if (!raw) return prs;
+      for (const tab of JSON.parse(raw).tabs || []) {
+        if (prs.size >= MAX_PRS) break;
+        if (tab.type !== "pr" || !tab.data) continue;
+        const d = tab.data;
+        if (d.state !== "open" || d.merged) continue;
+        const href = d.html_url ||
+          `https://github.com/${d.owner}/${d.repo}/pull/${d.pull_number}`;
+        const label = (d.title || `${d.repo}#${d.pull_number}`).trim();
+        prs.set(href, label);
       }
     } catch (e) {
-      out.error = String(e);
+      // malformed storage entry; show no PRs rather than wrong ones
     }
-    return out;
+    return prs;
   }
 
   let lastBannerState = "";
