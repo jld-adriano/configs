@@ -1059,4 +1059,40 @@ in {
       StandardErrorPath = "/tmp/window-colors-sink.err.log";
     };
   };
+
+  # Local sink for the devin-stream Chrome extension: receives live session
+  # captures (network stream + IndexedDB/localStorage discovery) and serves
+  # the aggregated per-session summary (~/.local/state/devin-stream/, :48292).
+  launchd.agents.devin-stream-sink = {
+    enable = true;
+    config = {
+      Label = "local.devin-stream-sink";
+      ProgramArguments = [
+        "/usr/bin/python3"
+        "${config.home.homeDirectory}/projs/configs/home-manager/scripts/devin-stream-sink"
+      ];
+      RunAtLoad = true;
+      KeepAlive = true;
+      StandardOutPath = "/tmp/devin-stream-sink.out.log";
+      StandardErrorPath = "/tmp/devin-stream-sink.err.log";
+    };
+  };
+
+  # Serve the Devin session dashboard (chrome-extensions/dashboard/) on :48293
+  # so it's always up; the devin-dashboard script (no args) just opens it.
+  launchd.agents.devin-dashboard = {
+    enable = true;
+    config = {
+      Label = "local.devin-dashboard";
+      ProgramArguments = [
+        "/bin/bash"
+        "${config.home.homeDirectory}/projs/configs/home-manager/scripts/devin-dashboard"
+        "--serve"
+      ];
+      RunAtLoad = true;
+      KeepAlive = true;
+      StandardOutPath = "/tmp/devin-dashboard.out.log";
+      StandardErrorPath = "/tmp/devin-dashboard.err.log";
+    };
+  };
 }

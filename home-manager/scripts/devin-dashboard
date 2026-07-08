@@ -5,6 +5,12 @@
 # window-colors sink (:48291) and devin-stream sink (:48292) directly via CORS.
 # We serve it over HTTP (rather than file://) so it can also read the
 # aerospace-layout.json symlink for the workspace grouping.
+#
+# Usage:
+#   devin-dashboard          open in the browser (reuses a running server,
+#                            else starts one in the background)
+#   devin-dashboard --serve  serve only, in the foreground (launchd mode; the
+#                            devin-dashboard launchd agent runs this)
 
 set -euo pipefail
 
@@ -19,7 +25,12 @@ if [ -e "$LAYOUT_CACHE" ] && [ ! -e "$DASH_DIR/aerospace-layout.json" ]; then
   ln -sf "$LAYOUT_CACHE" "$DASH_DIR/aerospace-layout.json"
 fi
 
-# Reuse an already-running server on our port.
+if [ "${1:-}" = "--serve" ]; then
+  cd "$DASH_DIR"
+  exec python3 -m http.server "$PORT" --bind 127.0.0.1
+fi
+
+# Reuse an already-running server on our port (the launchd agent, normally).
 if ! curl -sf --max-time 2 -o /dev/null "$URL"; then
   (cd "$DASH_DIR" && nohup python3 -m http.server "$PORT" --bind 127.0.0.1 \
     >/tmp/devin-dashboard.log 2>&1 &)
