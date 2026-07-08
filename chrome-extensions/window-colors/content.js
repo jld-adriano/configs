@@ -63,6 +63,50 @@
   let assignedColor = null;
   let assignedSymbol = null;
 
+  // ── Global HUD visibility toggle ──────────────────────────────────────────
+  // A tiny always-visible dot (bottom-right) hides/shows the badge, banner and
+  // awaiting line in EVERY tab. Persisted in chrome.storage.local so one click
+  // propagates live via chrome.storage.onChanged.
+
+  let hudHidden = false;
+
+  function renderHudToggle() {
+    let dot = document.getElementById("wc-hud-toggle");
+    if (!dot) {
+      dot = document.createElement("div");
+      dot.id = "wc-hud-toggle";
+      dot.title = "Toggle window-colors HUD (all tabs)";
+      dot.addEventListener("click", () => {
+        try {
+          chrome.storage.local.set({ hudHidden: !hudHidden });
+        } catch (e) {
+          // extension context invalidated; flip locally as a fallback
+          hudHidden = !hudHidden;
+          tick();
+        }
+      });
+      document.documentElement.appendChild(dot);
+    }
+    dot.classList.toggle("wc-hud-off", hudHidden);
+  }
+
+  function onStorageChanged(changes, area) {
+    if (area !== "local" || !("hudHidden" in changes)) return;
+    hudHidden = !!changes.hudHidden.newValue;
+    tick();
+  }
+
+  try {
+    chrome.storage.local.get("hudHidden", (data) => {
+      if (chrome.runtime.lastError) return;
+      hudHidden = !!(data && data.hudHidden);
+      tick();
+    });
+    chrome.storage.onChanged.addListener(onStorageChanged);
+  } catch (e) {
+    // extension context invalidated; HUD stays visible
+  }
+
   function currentColor() {
     return assignedColor || hashToHSL(getStableKey());
   }
@@ -127,6 +171,7 @@
         title: document.title,
         kind: isDevinSession() ? "devin" : "capy",
         awaiting: isAwaiting(),
+        hudHidden,
         sessionTitle: isDevinSession() ? getSessionTitle() : null,
         prs: isDevinSession() ? [...collectPRs().entries()] : [],
         color: currentColor(),
@@ -301,9 +346,14 @@
         border = document.createElement("div");
         border.id = "wc-await-border";
         border.setAttribute("aria-hidden", "true");
-        // Inline so it wins over any stale injected stylesheet that still
-        // carries the old pulse animation.
-        border.style.animation = "none";
+        // Inline so it wins over any stale injected stylesheet: long-lived
+        // tabs keep the style.css they loaded with (old pulse animation, old
+        // full-perimeter 18px border) and that copy wins the cascade over
+        // re-injected CSS, so the bottom-line geometry must be inline too.
+        border.style.cssText =
+          "position:fixed;left:0;right:0;bottom:0;top:auto;height:8px;" +
+          "border:0;background:rgba(255,106,0,0.85);box-sizing:border-box;" +
+          "z-index:2147483647;pointer-events:none;animation:none;";
         document.documentElement.appendChild(border);
       }
     } else if (border) {
@@ -312,6 +362,14 @@
   }
 
   function tick() {
+    renderHudToggle();
+    if (hudHidden) {
+      for (const id of ["wc-badge", "wc-banner", "wc-await-border"]) {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      }
+      return;
+    }
     // Badges/banners are for agent chats only (Devin sessions, Capy threads);
     // ordinary Chrome pages get nothing but the awaiting-border detection.
     if (isDevinSession()) {
@@ -346,7 +404,8 @@
     observer.disconnect();
     clearInterval(tickTimer);
     clearInterval(hbTimer);
-    for (const id of ["wc-badge", "wc-banner", "wc-await-border"]) {
+    try { chrome.storage.onChanged.removeListener(onStorageChanged); } catch (e) {}
+    for (const id of ["wc-badge", "wc-banner", "wc-await-border", "wc-hud-toggle"]) {
       const el = document.getElementById(id);
       if (el) el.remove();
     }

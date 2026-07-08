@@ -70,11 +70,46 @@
   white-space: nowrap;
 }
 
+/* Awaiting instructions: a line along the bottom edge (a full-perimeter
+   border proved too intrusive) */
 #wc-await-border {
   position: fixed;
-  inset: 0;
-  border: 18px solid rgba(255, 106, 0, 0.85);
+  /* inset/border set explicitly to beat the stale full-perimeter rule that
+     older injected stylesheets may still carry in long-lived tabs */
+  inset: auto 0 0 0;
+  height: 8px;
+  border: 0;
+  background: rgba(255, 106, 0, 0.85);
   box-sizing: border-box;
-  z-index: 2147483646;
+  z-index: 2147483647;
   pointer-events: none;
+}
+
+/* Always-visible dot to show/hide the HUD globally (bottom-right; top-right
+   is taken by the badge/banner) */
+#wc-hud-toggle {
+  position: fixed;
+  bottom: 6px;
+  right: 6px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 106, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-sizing: border-box;
+  z-index: 2147483647;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+#wc-hud-toggle:hover {
+  background: rgba(255, 106, 0, 0.9);
+}
+
+#wc-hud-toggle.wc-hud-off {
+  background: rgba(128, 128, 128, 0.3);
+}
+
+#wc-hud-toggle.wc-hud-off:hover {
+  background: rgba(128, 128, 128, 0.8);
 }
