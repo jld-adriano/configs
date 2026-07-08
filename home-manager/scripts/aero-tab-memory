@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""Rank Chrome tabs by JS heap usage (aero-tab-memory, alt-shift-m).
+
+Data source: the window-colors extension samples performance.memory in every
+tab and reports it to the local sink (window-colors-sink, port 48291) every
+30s. This script fetches GET /state, sorts tabs by jsHeapUsed descending, and
+shows a native list picker. Selecting a row activates that tab in its Chrome
+window and focuses the window via AeroSpace.
+
+ACCURACY CAVEAT (shown in the picker header too): performance.memory reports
+the JS heap of the tab's RENDERER PROCESS, and Chrome may co-host several
+same-site tabs (e.g. many app.devin.ai tabs) in one process. Tabs reporting an
+identical heap value are almost certainly sharing a process and are marked
+with a shared [P#] tag; same-site tabs may share a process even when their
+sampled values differ (samples are taken at different moments). The ranking is
+still the right signal for runaway agent-session heaps, just not an exact
+per-tab accounting.
+"""
+
+import json
+import re
+import subprocess
+import time
+import urllib.request
+from collections import defaultdict, deque
+
+SINK_STATE_URL = "http://127.0.0.1:48291/state"
+STALE_MS = 5 * 60 * 1000  # ignore tab reports older than the sink's own window
+
+
+def run(cmd, timeout=30):
+    return subprocess.run(
+        cmd, shell=True, capture_output=True, text=True, timeout=timeout
+    ).stdout
+
+
+def osascript(script, argv=None, timeout=300):
+    cmd = ["osascript", "-e", script] + (argv or [])
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout
+    ).stdout.strip()
+
+
+def notify(msg):
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "{msg}" with title "Tab Memory"'],
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+# ── Data collection ──────────────────────────────────────────────────────────
+
+def fetch_sink_state():
+    try:
+        with urllib.request.urlopen(SINK_STATE_URL, timeout=5) as r:
+            return json.load(r)
+    except Exception:
+        return None
+
+
+def chrome_total_rss_gb():
+    """Whole-Chrome OS footprint (all processes' RSS), for header context."""
+    total_kb = 0
+    nproc = 0
+    for line in run("ps -axo rss=,comm=").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and "Google Chrome" in parts[1]:
+            try:
+                total_kb += int(parts[0])
+                nproc += 1
+            except ValueError:
+                pass
+    return total_kb / 1024 / 1024, nproc
+
+
+CHROME_TABS_APPLESCRIPT = (
+    'tell application "Google Chrome"\n'
+    '  set out to ""\n'
+    '  repeat with w in windows\n'
+    '    set wid to id of w\n'
+    '    set ai to active tab index of w\n'
+    '    set ti to 0\n'
+    '    repeat with t in tabs of w\n'
+    '      set ti to ti + 1\n'
+    '      set tu to ""\n'
+    '      try\n'
+    '        set tu to URL of t\n'
+    '      end try\n'
+    '      set tt to ""\n'
+    '      try\n'
+    '        set tt to title of t\n'
+    '      end try\n'
+    '      set out to out & wid & "|||" & ti & "|||" & ai & "|||" & '
+    'tu & "|||" & tt & linefeed\n'
+    '    end repeat\n'
+    '  end repeat\n'
+    '  return out\n'
+    'end tell'
+)
+
+
+def chrome_tab_map():
+    """Enumerate Chrome tabs: url -> deque of (winId, tabIndex), plus each
+    window's active-tab title (winId -> title) for workspace correlation."""
+    by_url = defaultdict(deque)
+    by_title = defaultdict(deque)
+    active_title = {}
+    try:
+        out = osascript(CHROME_TABS_APPLESCRIPT, timeout=60)
+    except Exception:
+        return by_url, by_title, active_title
+    for line in out.split("\n"):
+        parts = line.split("|||")
+        if len(parts) != 5:
+            continue
+        wid, ti, ai, url, title = parts
+        try:
+            wid, ti, ai = int(wid), int(ti), int(ai)
+        except ValueError:
+            continue
+        by_url[url.strip()].append((wid, ti))
+        by_title[title.strip()].append((wid, ti))
+        if ti == ai:
+            active_title[wid] = title.strip()
+    return by_url, by_title, active_title
+
+
+def clean_title(title):
+    """Reduce an AeroSpace Chrome window title to its active tab title."""
+    t = re.sub(r"\s*-\s*Google Chrome.*$", "", title)
+    t = re.sub(r"\s*-\s*High memory usage.*$", "", t)
+    return t.strip()
+
+
+def aerospace_chrome_windows():
+    """[(aerospace window-id, workspace, cleaned title)] for Chrome windows."""
+    rows = []
+    fmt = "%{window-id}|%{workspace}|%{app-name}|%{window-title}"
+    for line in run(
+            f"aerospace list-windows --all --format '{fmt}'").splitlines():
+        parts = line.split("|", 3)
+        if len(parts) == 4 and parts[2].strip() == "Google Chrome":
+            try:
+                rows.append((int(parts[0].strip()), parts[1].strip(),
+                             clean_title(parts[3].strip())))
+            except ValueError:
+                pass
+    return rows
+
+
+def workspace_by_chrome_window(active_title, aero_windows):
+    """Map Chrome window id -> workspace by matching active-tab titles."""
+    ws = {}
+    used = set()
+    for wid, title in active_title.items():
+        ct = clean_title(title)
+        if not ct:
+            continue
+        for awid, workspace, atitle in aero_windows:
+            if awid in used or not atitle:
+                continue
+            if atitle == ct or ct.startswith(atitle) or atitle.startswith(ct):
+                used.add(awid)
+                ws[wid] = workspace
+                break
+    return ws
+
+
+# ── Ranking / picker ─────────────────────────────────────────────────────────
+
+def build_rows(tabs):
+    """Sort by heap desc; tag identical-heap groups as likely shared process."""
+    tabs = [t for t in tabs if isinstance(t.get("jsHeapUsed"), (int, float))]
+    tabs.sort(key=lambda t: -t["jsHeapUsed"])
+
+    groups = defaultdict(list)  # exact heap value -> tab indices
+    for i, t in enumerate(tabs):
+        groups[t["jsHeapUsed"]].append(i)
+    shared_tag = {}
+    n = 0
+    for heap, idxs in groups.items():
+        if len(idxs) > 1:
+            n += 1
+            for i in idxs:
+                shared_tag[i] = f"P{n}"
+
+    rows = []
+    for i, t in enumerate(tabs):
+        mb = t["jsHeapUsed"] / (1024 * 1024)
+        title = (t.get("sessionTitle") or t.get("title")
+                 or t.get("url") or "(unknown)")
+        if len(title) > 70:
+            title = title[:67] + "..."
+        tag = f"  [{shared_tag[i]} shared]" if i in shared_tag else ""
+        rows.append({"tab": t, "mb": mb, "title": title, "tag": tag})
+    return rows
+
+
+def pick_row(rows, ws_by_window, header):
+    labels = []
+    for rank, r in enumerate(rows, 1):
+        ws = ws_by_window.get(r["window_key"], "?") if r.get(
+            "window_key") is not None else "?"
+        labels.append(
+            f"{rank:>2}.  {r['mb']:>6.0f} MB  ·  WS{ws}  ·  "
+            f"{r['title']}{r['tag']}")
+    script = (
+        'on run argv\n'
+        '  tell application "System Events"\n'
+        '    activate\n'
+        '    set choice to choose from list argv '
+        'with title "Chrome Tabs by JS Heap" '
+        f'with prompt "{header}" '
+        'default items {item 1 of argv} '
+        'OK button name "Focus" cancel button name "Close"\n'
+        '  end tell\n'
+        '  if choice is false then\n'
+        '    return "###CANCEL###"\n'
+        '  else\n'
+        '    return item 1 of choice\n'
+        '  end if\n'
+        'end run'
+    )
+    res = osascript(script, argv=labels)
+    if not res or res == "###CANCEL###":
+        return None
+    for label, r in zip(labels, rows):
+        if label == res:
+            return r
+    return None
+
+
+def focus_tab(win_id, tab_index, tab_title, aero_windows_fetch):
+    """Activate the tab inside Chrome, then focus its window via AeroSpace."""
+    script = (
+        'tell application "Google Chrome"\n'
+        f'  set w to (first window whose id is {win_id})\n'
+        f'  set active tab index of w to {tab_index}\n'
+        '  set index of w to 1\n'
+        '  activate\n'
+        'end tell'
+    )
+    try:
+        osascript(script, timeout=30)
+    except Exception:
+        return False
+    # Now the window's title is the tab's title; hand focus to AeroSpace so
+    # the right workspace/monitor gets switched too.
+    time.sleep(0.3)
+    ct = clean_title(tab_title or "")
+    if ct:
+        for awid, _ws, atitle in aero_windows_fetch():
+            if atitle and (atitle == ct or ct.startswith(atitle)
+                           or atitle.startswith(ct)):
+                run(f"aerospace focus --window-id {awid}")
+                return True
+    return True  # Chrome activate already brought the window forward
+
+
+def main():
+    state = fetch_sink_state()
+    if not state or not state.get("tabs"):
+        notify("Sink unreachable or no tab data yet (extension reports "
+               "every 30s)")
+        return
+
+    now_ms = time.time() * 1000
+    tabs = [t for t in state["tabs"]
+            if now_ms - t.get("reportedAt", 0) < STALE_MS]
+    rows = build_rows(tabs)
+    if not rows:
+        notify("No per-tab memory data yet -- wait ~1 min for the extension "
+               "to report")
+        return
+
+    # Correlate sink tabs with live Chrome windows (for workspace + focusing).
+    by_url, by_title, active_title = chrome_tab_map()
+    aero_windows = aerospace_chrome_windows()
+    ws_map = workspace_by_chrome_window(active_title, aero_windows)
+    for r in rows:
+        t = r["tab"]
+        loc = None
+        url = (t.get("url") or "").strip()
+        if url and by_url.get(url):
+            loc = by_url[url].popleft()
+        elif t.get("title") and by_title.get(t["title"].strip()):
+            loc = by_title[t["title"].strip()].popleft()
+        r["loc"] = loc  # (chrome window id, tab index) or None
+        r["window_key"] = loc[0] if loc else None
+
+    total_gb, nproc = chrome_total_rss_gb()
+    header = (
+        f"Chrome total footprint: {total_gb:.1f} GB RSS "
+        f"across {nproc} processes.\n"
+        "JS heap is measured per renderer PROCESS: rows tagged [P# shared] "
+        "report identical heaps and almost certainly share one process; "
+        "same-site tabs (app.devin.ai) may share a process even when values "
+        "differ. Select a row to focus that tab."
+    )
+    header = header.replace("\\", "\\\\").replace('"', '\\"')
+    header = header.replace("\n", "\\n")
+
+    chosen = pick_row(rows, ws_map, header)
+    if chosen is None:
+        return
+    if chosen["loc"] is None:
+        notify("Couldn't locate that tab in Chrome (it may have closed or "
+               "navigated)")
+        return
+    win_id, tab_index = chosen["loc"]
+    tab = chosen["tab"]
+    focus_tab(win_id, tab_index,
+              tab.get("title") or tab.get("sessionTitle") or "",
+              aerospace_chrome_windows)
+
+
+if __name__ == "__main__":
+    main()

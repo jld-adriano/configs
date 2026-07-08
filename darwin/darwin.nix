@@ -267,6 +267,9 @@
           # Search Chrome windows by title
           "alt-s" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-chrome-search";
           
+          # Rank Chrome tabs by JS heap memory (spot runaway Devin/Capy tabs)
+          "alt-shift-m" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-tab-memory";
+          
           # Reload all Chrome tabs
           "alt-shift-r" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-reload-windows";
           

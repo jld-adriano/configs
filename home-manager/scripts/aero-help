@@ -55,6 +55,7 @@ APPS & ACTIONS
   alt-shift-s        → Lock current layout (snapshot)
   alt-shift-a        → Reapply locked layout (best-effort)
   alt-s              → Search Chrome windows
+  alt-shift-m        → Chrome tabs by memory (JS heap)
   alt-shift-r        → Reload Chrome tabs
   alt-ctrl-j         → Scroll Slack + Devin/Capy to bottom
 
