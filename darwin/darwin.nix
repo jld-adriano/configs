@@ -20,7 +20,8 @@
   #   alt-h/j/k/l     - Focus window left/down/up/right (vim-style)
   #   alt-shift-h/j/k/l - Move window left/down/up/right
   #   alt-f           - Toggle fullscreen
-  #   alt-shift-f     - Flatten workspace tree (reset layout to tiles)
+  #   alt-shift-f     - Flatten workspace tree (reset layout to horizontal tiles)
+  #   alt-shift-v     - Force vertical tiles (rows, stacked top-to-bottom)
   #   alt-ctrl-f      - Set all workspaces to accordion layout
   #   alt-b           - Balance window sizes
   #   alt-period      - Focus next monitor
@@ -187,6 +188,8 @@
           
           # Layout reset - force horizontal tiles (undoes weird vertical splits)
           "alt-shift-f" = ["flatten-workspace-tree" "layout h_tiles" "balance-sizes"];
+          # Force vertical tiles (rows) - stacks windows top-to-bottom
+          "alt-shift-v" = ["flatten-workspace-tree" "layout v_tiles" "balance-sizes"];
           # Set ALL workspaces to accordion (one window prominent at a time)
           "alt-ctrl-f" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-accordion";
           "alt-b" = "balance-sizes";
