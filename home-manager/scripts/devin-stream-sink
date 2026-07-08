@@ -31,7 +31,11 @@ Payload sources (documented from captured traffic):
   * GET .../v2sessions            -> result[]: devin_id, title, status,
         pull_requests [{state, pr_url, draft}],
         latest_message_contents / initial_user_message_contents
-        ({type: devin_message|user_message|initial_user_message, message, ts})
+        ({type: devin_message|user_message|initial_user_message, message, ts}).
+        last*Message selection is by max message timestamp per side;
+        initial_user_message is only a fallback when no user_message exists
+  * GET /api/events/devin-<id>/stream -> {"result":[{event}...]} message
+        history (same event types as the live WS)
   * GET /api/sessions/devin-<id>  -> same shape, single session
   * GET /api/sessions/devin-<id>/prs -> [{pr_url, state, draft,
         github_pr_data:{merged, number, title, ...}}] (bodies truncated at
@@ -111,7 +115,11 @@ def _write_latest():
 # ── Per-session summary (folded from captured Devin API payloads) ───────────
 
 MSG_TRUNC = 300
-HUMAN_MSG_TYPES = {"user_message", "initial_user_message"}
+# "initial_user_message" is deliberately NOT a lastHumanMessage source: it is
+# by definition the session's FIRST message, so it only serves as a fallback
+# when no real user_message was ever captured (see _note_message).
+HUMAN_MSG_TYPES = {"user_message"}
+INITIAL_HUMAN_TYPE = "initial_user_message"
 AGENT_MSG_TYPES = {"devin_message"}
 
 # Trim sub-microsecond precision (WS events carry nanoseconds) so
@@ -158,27 +166,40 @@ def _sid_from_devin_id(devin_id):
     return _safe_session_id(devin_id)
 
 
-def _note_message(summ, contents, fallback_ts):
-    """Record a chat message if it's newer than the one we have.
+def _note_message(summ, contents):
+    """Record a chat message if it's newer (max message timestamp wins).
 
-    Only full chat messages count: user_message/initial_user_message (human)
-    and devin_message (agent). Reasoning/tool event types (devin_thoughts,
-    one_line_thoughts, thought_summary, shell_*, terminal_update, mcp_*, ...)
-    are excluded, as are streaming partials (ops-frames carry no "message").
+    Only full chat messages count: user_message (human) and devin_message
+    (agent). Reasoning/tool event types (devin_thoughts, one_line_thoughts,
+    thought_summary, shell_*, terminal_update, mcp_*, ...) are excluded, as
+    are streaming partials (ops-frames carry no "message").
+
+    Selection is strictly by the message's OWN timestamp -- never the capture
+    time: v2sessions re-sends old contents on every poll, so stamping them
+    with capture time made the FIRST user message look perpetually newest.
+    A message without a timestamp only fills an empty slot (epoch 0).
+
+    initial_user_message is handled apart: it is the session's first message,
+    used only as a fallback while no real user_message has been captured.
     """
     if not isinstance(contents, dict):
         return
+    text = contents.get("message")
+    if not isinstance(text, str) or not text.strip():
+        return
     mtype = contents.get("type")
+    if mtype == INITIAL_HUMAN_TYPE:
+        if summ["lastHumanMessage"] is None:
+            summ["lastHumanMessage"] = _trunc_msg(text)
+            summ["lastHumanMessageAt"] = contents.get("timestamp")
+        return
     if mtype in HUMAN_MSG_TYPES:
         key = "lastHumanMessage"
     elif mtype in AGENT_MSG_TYPES:
         key = "lastAgentMessage"
     else:
         return
-    text = contents.get("message")
-    if not isinstance(text, str) or not text.strip():
-        return
-    ts = contents.get("timestamp") or fallback_ts
+    ts = contents.get("timestamp")
     if _epoch(ts) >= _epoch(summ.get(key + "At")):
         summ[key] = _trunc_msg(text)
         summ[key + "At"] = ts
@@ -204,6 +225,32 @@ def _note_pr(summ, url, state=None, draft=None, merged=None):
         pr["draft"] = bool(draft)
 
 
+_DECODER = json.JSONDecoder()
+
+
+def _iter_truncated_array(body, prefix):
+    """Yield complete JSON objects from a possibly-truncated `prefix[{...},...`.
+
+    The extension truncates net bodies at 24KB, so large v2sessions //stream
+    responses fail json.loads; decoding item by item still recovers every
+    complete leading element.
+    """
+    if not body.startswith(prefix):
+        return
+    i = len(prefix)
+    while True:
+        try:
+            obj, i = _DECODER.raw_decode(body, i)
+        except ValueError:
+            return
+        if isinstance(obj, dict):
+            yield obj
+        while i < len(body) and body[i] in ", \t\r\n":
+            i += 1
+        if i >= len(body) or body[i] == "]":
+            return
+
+
 def _fold_session_obj(obj, ts):
     """Fold one session object from v2sessions / session-detail payloads."""
     sid = _sid_from_devin_id(obj.get("devin_id"))
@@ -219,8 +266,8 @@ def _fold_session_obj(obj, ts):
         if isinstance(pr, dict):
             _note_pr(summ, pr.get("pr_url"),
                      state=pr.get("state"), draft=pr.get("draft"))
-    _note_message(summ, obj.get("initial_user_message_contents"), ts)
-    _note_message(summ, obj.get("latest_message_contents"), ts)
+    _note_message(summ, obj.get("initial_user_message_contents"))
+    _note_message(summ, obj.get("latest_message_contents"))
 
 
 def _fold_net(record):
@@ -245,19 +292,32 @@ def _fold_net(record):
         if sid and isinstance(ev, dict):
             summ = _summary_for(sid)
             summ["lastSeen"] = ts
-            _note_message(summ, ev, ts)
+            _note_message(summ, ev)
         return
 
     url = (d.get("url") or "").split("?")[0]
     if url.endswith("/v2sessions"):
         try:
             b = json.loads(body)
-        except ValueError:
+            items = (b.get("result") or []) if isinstance(b, dict) else []
+        except ValueError:  # truncated body: recover the complete lead items
+            items = _iter_truncated_array(body, '{"result":[')
+        for obj in items:
+            if isinstance(obj, dict):
+                _fold_session_obj(obj, ts)
+        return
+
+    # Message-history endpoint: /api/events/devin-<id>/stream returns
+    # {"result":[{event}...]} with the same event types as the live WS.
+    em = re.search(r"/api/events/devin-([0-9a-f]+)/stream$", url)
+    if em:
+        sid = _safe_session_id(em.group(1))
+        if not sid:
             return
-        if isinstance(b, dict):
-            for obj in b.get("result") or []:
-                if isinstance(obj, dict):
-                    _fold_session_obj(obj, ts)
+        summ = _summary_for(sid)
+        summ["lastSeen"] = ts
+        for ev in _iter_truncated_array(body, '{"result":['):
+            _note_message(summ, ev)
         return
 
     m = _SESSION_API.search(url)
