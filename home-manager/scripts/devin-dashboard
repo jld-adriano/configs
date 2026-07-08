@@ -1,0 +1,32 @@
+#!/bin/bash
+# Serve the Devin/Capy session dashboard and open it in the browser.
+#
+# The dashboard is a static page (chrome-extensions/dashboard/) that polls the
+# window-colors sink (:48291) and devin-stream sink (:48292) directly via CORS.
+# We serve it over HTTP (rather than file://) so it can also read the
+# aerospace-layout.json symlink for the workspace grouping.
+
+set -euo pipefail
+
+PORT=48293
+DASH_DIR="$HOME/projs/configs/chrome-extensions/dashboard"
+LAYOUT_CACHE="$HOME/.cache/aerospace-layout.json"
+URL="http://127.0.0.1:$PORT/"
+
+# Live workspace map: symlink the aerospace layout cache into the served dir so
+# the page can fetch it same-origin (http.server follows symlinks).
+if [ -e "$LAYOUT_CACHE" ] && [ ! -e "$DASH_DIR/aerospace-layout.json" ]; then
+  ln -sf "$LAYOUT_CACHE" "$DASH_DIR/aerospace-layout.json"
+fi
+
+# Reuse an already-running server on our port.
+if ! curl -sf --max-time 2 -o /dev/null "$URL"; then
+  (cd "$DASH_DIR" && nohup python3 -m http.server "$PORT" --bind 127.0.0.1 \
+    >/tmp/devin-dashboard.log 2>&1 &)
+  for _ in $(seq 1 20); do
+    curl -sf --max-time 1 -o /dev/null "$URL" && break
+    sleep 0.25
+  done
+fi
+
+open "$URL"

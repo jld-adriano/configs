@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Devin Sessions</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-row">
+      <h1><span class="logo">◉</span> Devin Sessions</h1>
+      <div id="conn-status" class="conn-status">
+        <span id="wc-dot" class="dot dot-off" title="window-colors sink :48291"></span>
+        <span class="conn-label">window-colors</span>
+        <span id="ds-dot" class="dot dot-off" title="devin-stream sink :48292"></span>
+        <span class="conn-label">devin-stream</span>
+        <span id="ws-dot" class="dot dot-off" title="aerospace-layout.json"></span>
+        <span class="conn-label">workspaces</span>
+      </div>
+    </div>
+
+    <div id="stats" class="stats"></div>
+
+    <div class="controls">
+      <div class="control-group">
+        <span class="control-label">Group by</span>
+        <select id="group-by">
+          <option value="workspace">Workspace</option>
+          <option value="kind">Kind</option>
+          <option value="awaiting">Awaiting</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <span class="control-label">Sort</span>
+        <select id="sort-by">
+          <option value="lastSeen">Last seen</option>
+          <option value="title">Title</option>
+          <option value="memory">Memory</option>
+          <option value="prs">PR count</option>
+        </select>
+      </div>
+      <label class="control-group toggle">
+        <input type="checkbox" id="awaiting-only">
+        <span>Awaiting only</span>
+      </label>
+      <input type="search" id="filter-text" placeholder="Filter by title / PR…">
+    </div>
+  </header>
+
+  <main id="groups"></main>
+
+  <section id="stream-panel" class="stream-panel">
+    <h2>devin-stream <span id="stream-status" class="stream-status"></span></h2>
+    <div id="stream-body" class="stream-body"></div>
+  </section>
+
+  <footer id="footer"></footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
