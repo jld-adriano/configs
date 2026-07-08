@@ -260,7 +260,7 @@
   // border. Detection is text-based (the phrases the agent apps render), so
   // it works uniformly for Devin/Capy/Slack/etc.
   const AWAIT_PATTERNS = [
-    /waiting for instructions/i,
+    /a?waiting (for )?instructions/i,
     /action required/i,
     /devin went to sleep/i,
     /capy is idle/i,
