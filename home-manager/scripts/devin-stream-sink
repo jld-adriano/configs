@@ -24,12 +24,25 @@ On top of the raw capture we maintain a clean per-session SUMMARY, folded from
 the captured Devin API payloads as they arrive (and backfilled from
 events.jsonl on first start):
 
-    summary[sessionId] = {title, status, statusEnum, statusMessage,
+    summary[sessionId] = {title, rawTitle, status, statusEnum, statusMessage,
                           statusEnumAt, awaiting,
                           prs: [{number,title,url,state,merged,
                           draft}], lastHumanMessage, lastAgentMessage,
                           recentMessages: [{role: "human"|"agent", text, ts}]
-                          (last 4 chat messages, oldest -> newest), lastSeen}
+                          (last 4 chat messages, oldest -> newest), lastSeen,
+                          decidedTitle, symbol, symbolShortcode, decidedAt}
+
+On top of THAT, an optional LLM enrichment thread asks OpenAI (model
+gpt-5.5-mini) to pick a display SYMBOL (an emoji, chosen by shortcode from
+EMOJI_SHORTCODES below) and a short DECIDED TITLE for each session, from the
+raw title + the transcript tail. Consumers (window-colors banner/badge,
+dashboard cards) prefer decidedTitle/symbol and fall back to the raw title /
+hash-slot symbols when enrichment hasn't happened. Decisions are cached in
+~/.local/state/devin-stream/llm_decisions.json keyed by session id + a hash
+of the raw title, so restarts never re-bill and a changed title triggers a
+fresh decision. The API key is resolved lazily (env OPENAI_API_KEY, then a
+shell-rc export line, then ~/.config/devin-stream/openai_key); with no key
+the enrichment quietly disables itself and everything else keeps working.
 
 `awaiting` is derived here (single source of truth) so consumers -- notably
 the window-colors extension's banner/awaiting line -- never need to scan the
@@ -76,10 +89,14 @@ Inspect with:
     ls ~/.local/state/devin-stream/sessions/
 """
 
+import hashlib
 import json
 import os
 import re
+import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -99,6 +116,12 @@ SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]")
 # can reload it. "summary" is the clean per-session view folded from the
 # captured Devin API payloads (see module docstring for the payload paths).
 STATE = {"sessions": {}, "discovery": None, "summary": {}, "updatedAt": None}
+
+# The HTTP server (main thread) and the LLM enrichment thread both mutate
+# STATE and serialize it (latest.json, GET responses); serializing a dict
+# while the other thread inserts keys raises RuntimeError, hence the lock.
+# Never held across network calls.
+STATE_LOCK = threading.Lock()
 
 
 def _rotate(path, limit):
@@ -189,17 +212,20 @@ def _trunc_msg(text, limit=MSG_TRUNC):
 
 def _summary_for(sid):
     summ = STATE["summary"].setdefault(sid, {
-        "title": None, "status": None, "prs": [],
+        "title": None, "rawTitle": None, "status": None, "prs": [],
         "statusEnum": None, "statusEnumAt": None, "statusMessage": None,
         "awaiting": False,
         "lastHumanMessage": None, "lastHumanMessageAt": None,
         "lastAgentMessage": None, "lastAgentMessageAt": None,
         "recentMessages": [],
         "lastSeen": None,
+        "decidedTitle": None, "symbol": None, "symbolShortcode": None,
+        "decidedAt": None,
     })
     # Entries loaded from latest.json may predate newer fields.
     summ.setdefault("recentMessages", [])
-    for k in ("statusEnum", "statusEnumAt", "statusMessage"):
+    for k in ("statusEnum", "statusEnumAt", "statusMessage", "rawTitle",
+              "decidedTitle", "symbol", "symbolShortcode", "decidedAt"):
         summ.setdefault(k, None)
     summ.setdefault("awaiting", False)
     return summ
@@ -356,6 +382,7 @@ def _fold_session_obj(obj, ts):
     summ["lastSeen"] = ts
     if obj.get("title"):
         summ["title"] = obj["title"]
+        summ["rawTitle"] = obj["title"]
     if obj.get("status"):
         summ["status"] = obj["status"]
         _derive_awaiting(summ)
@@ -492,6 +519,432 @@ def _backfill_summary():
                     _fold_net(record)
 
 
+# ── LLM enrichment (symbol + decided title per session) ─────────────────────
+# A background thread periodically asks OpenAI to pick a distinctive emoji
+# (by shortcode, validated against EMOJI_SHORTCODES) and a punchier display
+# title for each session, from the raw title + transcript tail. Decisions are
+# cached persistently keyed by session id + raw-title hash, so restarts never
+# re-bill and a title change triggers exactly one new decision.
+
+LLM_MODEL = "gpt-5.5-mini"
+LLM_API_URL = "https://api.openai.com/v1/chat/completions"
+LLM_CYCLE_S = 60
+LLM_MAX_CALLS_PER_CYCLE = 5
+LLM_TITLE_MAX = 60
+LLM_TIMEOUT_S = 45
+LLM_CACHE_FILE = os.path.join(STATE_DIR, "llm_decisions.json")
+LLM_CACHE_MAX = 2000
+LLM_KEY_FILE = os.path.expanduser("~/.config/devin-stream/openai_key")
+LLM_RC_FILES = ("~/.zshrc", "~/.zshenv", "~/.zprofile",
+                "~/.bashrc", "~/.bash_profile", "~/.profile")
+_RC_KEY_RE = re.compile(
+    r'^\s*(?:export\s+)?OPENAI_API_KEY=["\']?([A-Za-z0-9_-]+)["\']?\s*$')
+
+# Canonical shortcode -> emoji map (GitHub/Slack-style shortcode names).
+# Single place of truth: the LLM answers with a shortcode from this list and
+# the sink emits the resolved emoji char, so consumers never need the map.
+# ~400 visually distinct single-glyph emoji.
+EMOJI_SHORTCODES = {
+    # animals - mammals
+    "dog": "🐶", "cat": "🐱", "mouse": "🐭", "hamster": "🐹",
+    "rabbit": "🐰", "fox_face": "🦊", "bear": "🐻", "panda_face": "🐼",
+    "koala": "🐨", "tiger": "🐯", "lion": "🦁", "cow": "🐮",
+    "pig": "🐷", "monkey_face": "🐵", "wolf": "🐺", "boar": "🐗",
+    "horse": "🐴", "unicorn": "🦄", "zebra": "🦓", "deer": "🦌",
+    "ox": "🐂", "water_buffalo": "🐃", "ram": "🐏", "sheep": "🐑",
+    "goat": "🐐", "camel": "🐫", "llama": "🦙", "giraffe": "🦒",
+    "elephant": "🐘", "rhinoceros": "🦏", "hippopotamus": "🦛",
+    "gorilla": "🦍", "orangutan": "🦧", "kangaroo": "🦘", "sloth": "🦥",
+    "otter": "🦦", "skunk": "🦨", "badger": "🦡", "raccoon": "🦝",
+    "hedgehog": "🦔", "bat": "🦇", "rat": "🐀", "chipmunk": "🐿️",
+    "beaver": "🦫", "bison": "🦬", "poodle": "🐩", "leopard": "🐆",
+    "mammoth": "🦣",
+    # animals - birds
+    "chicken": "🐔", "penguin": "🐧", "bird": "🐦", "baby_chick": "🐤",
+    "duck": "🦆", "eagle": "🦅", "owl": "🦉", "swan": "🦢",
+    "flamingo": "🦩", "peacock": "🦚", "parrot": "🦜", "dodo": "🦤",
+    "turkey": "🦃", "dove": "🕊️", "rooster": "🐓", "feather": "🪶",
+    # animals - reptiles, fish, bugs
+    "frog": "🐸", "crocodile": "🐊", "turtle": "🐢", "lizard": "🦎",
+    "snake": "🐍", "dragon": "🐉", "t-rex": "🦖", "sauropod": "🦕",
+    "whale": "🐳", "dolphin": "🐬", "seal": "🦭", "fish": "🐟",
+    "tropical_fish": "🐠", "blowfish": "🐡", "shark": "🦈",
+    "octopus": "🐙", "squid": "🦑", "shrimp": "🦐", "lobster": "🦞",
+    "crab": "🦀", "snail": "🐌", "butterfly": "🦋", "bug": "🐛",
+    "ant": "🐜", "bee": "🐝", "beetle": "🪲", "cricket": "🦗",
+    "spider": "🕷️", "scorpion": "🦂", "mosquito": "🦟", "worm": "🪱",
+    "lady_beetle": "🐞", "microbe": "🦠", "shell": "🐚",
+    # plants & nature
+    "seedling": "🌱", "herb": "🌿", "four_leaf_clover": "🍀",
+    "maple_leaf": "🍁", "leaves": "🍃", "mushroom": "🍄",
+    "cactus": "🌵", "palm_tree": "🌴", "evergreen_tree": "🌲",
+    "deciduous_tree": "🌳", "tulip": "🌷", "rose": "🌹",
+    "sunflower": "🌻", "blossom": "🌼", "cherry_blossom": "🌸",
+    "hibiscus": "🌺", "bouquet": "💐", "ear_of_rice": "🌾",
+    "rock": "🪨", "wood": "🪵",
+    # sky & weather
+    "sunny": "☀️", "crescent_moon": "🌙", "full_moon": "🌕",
+    "star": "⭐", "star2": "🌟", "dizzy": "💫", "sparkles": "✨",
+    "comet": "☄️", "zap": "⚡", "cloud": "☁️", "snowflake": "❄️",
+    "snowman": "⛄", "cyclone": "🌀", "rainbow": "🌈", "droplet": "💧",
+    "ocean": "🌊", "volcano": "🌋", "mount_fuji": "🗻", "mountain": "⛰️",
+    "earth_africa": "🌍", "globe_with_meridians": "🌐",
+    "ringed_planet": "🪐", "milky_way": "🌌", "tornado": "🌪️",
+    "fire": "🔥", "boom": "💥",
+    # fruit & vegetables
+    "apple": "🍎", "green_apple": "🍏", "pear": "🍐", "tangerine": "🍊",
+    "lemon": "🍋", "banana": "🍌", "watermelon": "🍉", "grapes": "🍇",
+    "strawberry": "🍓", "blueberries": "🫐", "melon": "🍈",
+    "cherries": "🍒", "peach": "🍑", "mango": "🥭", "pineapple": "🍍",
+    "coconut": "🥥", "kiwi_fruit": "🥝", "tomato": "🍅", "olive": "🫒",
+    "avocado": "🥑", "eggplant": "🍆", "broccoli": "🥦",
+    "leafy_green": "🥬", "cucumber": "🥒", "hot_pepper": "🌶️",
+    "corn": "🌽", "carrot": "🥕", "garlic": "🧄", "onion": "🧅",
+    "potato": "🥔", "sweet_potato": "🍠", "peanuts": "🥜",
+    "chestnut": "🌰",
+    # prepared food & drink
+    "bread": "🍞", "croissant": "🥐", "baguette_bread": "🥖",
+    "bagel": "🥯", "pretzel": "🥨", "cheese": "🧀", "egg": "🥚",
+    "bacon": "🥓", "pancakes": "🥞", "waffle": "🧇", "fries": "🍟",
+    "hamburger": "🍔", "pizza": "🍕", "hotdog": "🌭", "taco": "🌮",
+    "burrito": "🌯", "sandwich": "🥪", "popcorn": "🍿",
+    "doughnut": "🍩", "cookie": "🍪", "cake": "🍰", "birthday": "🎂",
+    "cupcake": "🧁", "pie": "🥧", "chocolate_bar": "🍫", "candy": "🍬",
+    "lollipop": "🍭", "honey_pot": "🍯", "ice_cream": "🍨",
+    "icecream": "🍦", "sushi": "🍣", "bento": "🍱", "ramen": "🍜",
+    "spaghetti": "🍝", "curry": "🍛", "stew": "🍲", "dumpling": "🥟",
+    "fortune_cookie": "🥠", "coffee": "☕", "tea": "🍵",
+    "beer": "🍺", "wine_glass": "🍷", "tropical_drink": "🍹",
+    "milk_glass": "🥛", "cup_with_straw": "🥤", "bubble_tea": "🧋",
+    "champagne": "🍾", "tumbler_glass": "🥃", "cocktail": "🍸",
+    "ice_cube": "🧊", "salt": "🧂",
+    # travel & vehicles
+    "rocket": "🚀", "flying_saucer": "🛸", "airplane": "✈️",
+    "helicopter": "🚁", "parachute": "🪂", "sailboat": "⛵",
+    "speedboat": "🚤", "canoe": "🛶", "ship": "🚢", "anchor": "⚓",
+    "racing_car": "🏎️", "taxi": "🚕", "bus": "🚌", "trolleybus": "🚎",
+    "fire_engine": "🚒", "ambulance": "🚑", "police_car": "🚓",
+    "truck": "🚚", "tractor": "🚜", "bike": "🚲", "kick_scooter": "🛴",
+    "motorcycle": "🏍️", "metro": "🚇", "tram": "🚊",
+    "steam_locomotive": "🚂", "monorail": "🚝", "skateboard": "🛹",
+    "roller_skate": "🛼", "fuelpump": "⛽", "construction": "🚧",
+    "vertical_traffic_light": "🚦", "wheel": "🛞",
+    # places & buildings
+    "house": "🏠", "house_with_garden": "🏡", "office": "🏢",
+    "school": "🏫", "hospital": "🏥", "bank": "🏦", "hotel": "🏨",
+    "convenience_store": "🏪", "factory": "🏭", "european_castle": "🏰",
+    "japanese_castle": "🏯", "stadium": "🏟️", "tent": "⛺",
+    "circus_tent": "🎪", "statue_of_liberty": "🗽", "tokyo_tower": "🗼",
+    "fountain": "⛲", "ferris_wheel": "🎡", "carousel_horse": "🎠",
+    "roller_coaster": "🎢", "moyai": "🗿", "izakaya_lantern": "🏮",
+    "wind_chime": "🎐",
+    # tools & hardware
+    "hammer": "🔨", "axe": "🪓", "pick": "⛏️", "hammer_and_wrench": "🛠️",
+    "wrench": "🔧", "screwdriver": "🪛", "nut_and_bolt": "🔩",
+    "gear": "⚙️", "chains": "⛓️", "link": "🔗", "paperclip": "📎",
+    "scissors": "✂️", "straight_ruler": "📏", "triangular_ruler": "📐",
+    "carpentry_saw": "🪚", "toolbox": "🧰", "magnet": "🧲",
+    "ladder": "🪜", "hook": "🪝", "key": "🔑", "old_key": "🗝️",
+    "lock": "🔒", "unlock": "🔓", "shield": "🛡️",
+    "crossed_swords": "⚔️", "dagger": "🗡️", "knife": "🔪",
+    "bomb": "💣", "firecracker": "🧨", "trident": "🔱",
+    "bow_and_arrow": "🏹", "boomerang": "🪃",
+    # science & medicine
+    "telescope": "🔭", "microscope": "🔬", "satellite": "📡",
+    "test_tube": "🧪", "petri_dish": "🧫", "dna": "🧬",
+    "alembic": "⚗️", "thermometer": "🌡️", "syringe": "💉",
+    "pill": "💊", "stethoscope": "🩺", "adhesive_bandage": "🩹",
+    "crutch": "🩼", "x-ray": "🩻", "atom_symbol": "⚛️",
+    "brain": "🧠", "anatomical_heart": "🫀", "lungs": "🫁",
+    "tooth": "🦷", "bone": "🦴", "eye": "👁️", "eyes": "👀",
+    "ear": "👂", "muscle": "💪", "footprints": "👣",
+    # tech & media
+    "computer": "💻", "desktop_computer": "🖥️", "keyboard": "⌨️",
+    "printer": "🖨️", "iphone": "📱", "telephone": "☎️",
+    "floppy_disk": "💾", "cd": "💿", "dvd": "📀", "minidisc": "💽",
+    "battery": "🔋", "electric_plug": "🔌", "bulb": "💡",
+    "flashlight": "🔦", "candle": "🕯️", "camera": "📷",
+    "video_camera": "📹", "movie_camera": "🎥", "clapper": "🎬",
+    "film_projector": "📽️", "tv": "📺", "radio": "📻",
+    "microphone": "🎤", "headphones": "🎧", "joystick": "🕹️",
+    "video_game": "🎮", "robot": "🤖", "mouse_trap": "🪤",
+    # music
+    "guitar": "🎸", "violin": "🎻", "trumpet": "🎺", "saxophone": "🎷",
+    "drum": "🥁", "banjo": "🪕", "accordion": "🪗",
+    "musical_keyboard": "🎹", "musical_note": "🎵", "bell": "🔔",
+    "postal_horn": "📯", "megaphone": "📣", "loudspeaker": "📢",
+    # office & writing
+    "books": "📚", "blue_book": "📘", "green_book": "📗",
+    "orange_book": "📙", "notebook": "📓", "ledger": "📒",
+    "bookmark": "🔖", "newspaper": "📰", "scroll": "📜",
+    "email": "✉️", "mailbox": "📫", "postbox": "📮",
+    "inbox_tray": "📥", "outbox_tray": "📤", "package": "📦",
+    "file_folder": "📁", "card_index": "📇", "clipboard": "📋",
+    "pushpin": "📌", "round_pushpin": "📍", "pencil2": "✏️",
+    "black_nib": "✒️", "crayon": "🖍️", "paintbrush": "🖌️",
+    "art": "🎨", "bar_chart": "📊", "chart_with_upwards_trend": "📈",
+    "chart_with_downwards_trend": "📉", "calendar": "📆",
+    "alarm_clock": "⏰", "hourglass": "⌛", "stopwatch": "⏱️",
+    "compass": "🧭", "world_map": "🗺️", "balance_scale": "⚖️",
+    "abacus": "🧮",
+    # money & valuables
+    "moneybag": "💰", "dollar": "💵", "credit_card": "💳",
+    "coin": "🪙", "gem": "💎", "ring": "💍", "crown": "👑",
+    "trophy": "🏆", "1st_place_medal": "🥇", "medal_military": "🎖️",
+    "amphora": "🏺", "luggage": "🧳", "briefcase": "💼",
+    "handbag": "👜", "school_satchel": "🎒", "gift": "🎁",
+    "red_envelope": "🧧",
+    # clothing
+    "tshirt": "👕", "jeans": "👖", "dress": "👗", "kimono": "👘",
+    "lab_coat": "🥼", "safety_vest": "🦺", "billed_cap": "🧢",
+    "tophat": "🎩", "mortar_board": "🎓", "rescue_worker_helmet": "⛑️",
+    "socks": "🧦", "gloves": "🧤", "scarf": "🧣", "coat": "🧥",
+    "hiking_boot": "🥾", "athletic_shoe": "👟", "high_heel": "👠",
+    "ballet_shoes": "🩰", "eyeglasses": "👓", "dark_sunglasses": "🕶️",
+    "closed_umbrella": "🌂", "umbrella": "☂️", "lipstick": "💄",
+    # games & sport
+    "soccer": "⚽", "basketball": "🏀", "football": "🏈",
+    "baseball": "⚾", "tennis": "🎾", "volleyball": "🏐",
+    "rugby_football": "🏉", "8ball": "🎱", "ping_pong": "🏓",
+    "badminton": "🏸", "golf": "⛳", "ice_hockey": "🏒",
+    "field_hockey": "🏑", "cricket_game": "🏏", "lacrosse": "🥍",
+    "boxing_glove": "🥊", "dart": "🎯", "bowling": "🎳",
+    "game_die": "🎲", "jigsaw": "🧩", "chess_pawn": "♟️",
+    "kite": "🪁", "yo_yo": "🪀", "magic_wand": "🪄",
+    "teddy_bear": "🧸", "nesting_dolls": "🪆", "pinata": "🪅",
+    "slot_machine": "🎰", "performing_arts": "🎭", "ticket": "🎫",
+    "crystal_ball": "🔮", "ski": "🎿", "sled": "🛷",
+    "curling_stone": "🥌", "diving_mask": "🤿",
+    "fishing_pole_and_fish": "🎣", "balloon": "🎈", "tada": "🎉",
+    "confetti_ball": "🎊", "ribbon": "🎀", "jack_o_lantern": "🎃",
+    "christmas_tree": "🎄", "spades": "♠️", "mahjong": "🀄",
+    "flower_playing_cards": "🎴",
+    # symbols & flags
+    "heart": "❤️", "orange_heart": "🧡", "yellow_heart": "💛",
+    "green_heart": "💚", "blue_heart": "💙", "purple_heart": "💜",
+    "black_heart": "🖤", "white_heart": "🤍", "brown_heart": "🤎",
+    "100": "💯", "warning": "⚠️", "recycle": "♻️", "infinity": "♾️",
+    "peace_symbol": "☮️", "yin_yang": "☯️", "skull": "💀",
+    "ghost": "👻", "alien": "👽", "space_invader": "👾",
+    "triangular_flag_on_post": "🚩", "checkered_flag": "🏁",
+    "white_flag": "🏳️", "black_flag": "🏴", "hole": "🕳️",
+    "broom": "🧹", "basket": "🧺", "soap": "🧼", "sponge": "🧽",
+    "bucket": "🪣", "fire_extinguisher": "🧯", "wastebasket": "🗑️",
+    "hourglass_flowing_sand": "⏳", "mirror": "🪞", "window": "🪟",
+    "chair": "🪑", "door": "🚪", "thread": "🧵", "yarn": "🧶",
+    "sewing_needle": "🪡", "knot": "🪢", "zzz": "💤",
+}
+
+
+def _log(msg):
+    print(time.strftime("%Y-%m-%dT%H:%M:%S%z") + " " + msg, flush=True)
+
+
+def _resolve_openai_key():
+    """Locate the OpenAI API key, cheapest source first (never logged).
+
+    Order: OPENAI_API_KEY env var -> an `export OPENAI_API_KEY=...` line in a
+    shell rc file -> the dedicated key file ~/.config/devin-stream/openai_key.
+    Called lazily every cycle, so dropping a key in place enables enrichment
+    without a restart.
+    """
+    key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if key:
+        return key
+    for rc in LLM_RC_FILES:
+        try:
+            with open(os.path.expanduser(rc)) as f:
+                for line in f:
+                    m = _RC_KEY_RE.match(line)
+                    if m:
+                        return m.group(1)
+        except OSError:
+            continue
+    try:
+        with open(LLM_KEY_FILE) as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except OSError:
+        pass
+    return None
+
+
+def _load_llm_cache():
+    try:
+        with open(LLM_CACHE_FILE) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _save_llm_cache(cache):
+    if len(cache) > LLM_CACHE_MAX:  # drop the oldest decisions
+        for ck in sorted(cache, key=lambda k: str(cache[k].get("decidedAt")))[
+                :len(cache) - LLM_CACHE_MAX]:
+            del cache[ck]
+    tmp = LLM_CACHE_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(cache, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, LLM_CACHE_FILE)
+    except OSError:
+        pass
+
+
+def _llm_cache_key(sid, raw_title):
+    return sid + ":" + hashlib.sha1(raw_title.encode("utf-8")).hexdigest()[:12]
+
+
+def _parse_llm_reply(content):
+    """Defensively extract {"symbol": ":shortcode:", "title": "..."}.
+
+    Returns {"shortcode", "emoji", "title"} or None if the reply is garbage
+    (no JSON object, unknown shortcode, empty title, ...).
+    """
+    if not isinstance(content, str):
+        return None
+    m = re.search(r"\{.*\}", content, re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    code, title = obj.get("symbol"), obj.get("title")
+    if not isinstance(code, str) or not isinstance(title, str):
+        return None
+    code = code.strip().strip(":").lower()
+    emoji = EMOJI_SHORTCODES.get(code)
+    title = " ".join(title.split())[:LLM_TITLE_MAX].strip()
+    if not emoji or not title:
+        return None
+    return {"shortcode": code, "emoji": emoji, "title": title}
+
+
+def _llm_decide(api_key, raw_title, recent_messages):
+    """One symbol+title decision from the model; None on any failure.
+
+    Retries once on a garbage (unparseable/invalid) reply; network/API errors
+    are not retried within a cycle -- the next cycle tries again.
+    """
+    transcript = []
+    for msg in (recent_messages or [])[-4:]:
+        if isinstance(msg, dict) and msg.get("text"):
+            who = "User" if msg.get("role") == "human" else "Agent"
+            transcript.append(who + ": " + str(msg["text"]))
+    user_prompt = "\n".join(
+        ["Session title: " + raw_title]
+        + (["Recent chat (oldest first):"] + transcript if transcript else [])
+        + ["",
+           "Allowed emoji shortcodes: "
+           + " ".join(":" + c + ":" for c in sorted(EMOJI_SHORTCODES))])
+    payload = json.dumps({
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content":
+                "You label software-agent work sessions so a human can spot "
+                "them at a glance. Reply with STRICT JSON only, no prose: "
+                '{"symbol": ":shortcode:", "title": "<display title>"}. '
+                "The symbol MUST be exactly one shortcode from the allowed "
+                "list, picked to evoke this session's subject matter and to "
+                "be distinctive. The title must be at most "
+                + str(LLM_TITLE_MAX) + " characters: a cleaner, punchier "
+                "version of the session title that keeps key identifiers "
+                "(component names, PR numbers). No trailing period."},
+            {"role": "user", "content": user_prompt},
+        ],
+    }).encode("utf-8")
+
+    for _ in range(2):  # one retry on a garbage reply
+        req = urllib.request.Request(
+            LLM_API_URL, data=payload, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + api_key})
+        try:
+            with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_S) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            _log("llm: request failed (%s); skipping" % type(e).__name__)
+            return None
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            content = None
+        dec = _parse_llm_reply(content)
+        if dec:
+            return dec
+    _log("llm: unparseable reply twice for %r; skipping" % raw_title[:40])
+    return None
+
+
+def _llm_cycle(cache, api_key):
+    """One enrichment pass: apply cached decisions, then spend up to
+    LLM_MAX_CALLS_PER_CYCLE API calls on sessions that lack a decision for
+    their CURRENT raw title (new sessions or renamed ones), freshest first.
+    """
+    with STATE_LOCK:
+        items = sorted(
+            STATE["summary"].items(),
+            key=lambda kv: str(kv[1].get("lastSeen") or ""), reverse=True)
+    calls = 0
+    changed = False
+    for sid, summ in items:
+        raw_title = summ.get("title")
+        if not raw_title:
+            continue
+        ck = _llm_cache_key(sid, raw_title)
+        dec = cache.get(ck)
+        if dec is None:
+            if not api_key or calls >= LLM_MAX_CALLS_PER_CYCLE:
+                continue
+            calls += 1
+            dec = _llm_decide(api_key, raw_title, summ.get("recentMessages"))
+            if dec is None:
+                continue  # keep the previous decision / consumer fallback
+            dec["rawTitle"] = raw_title
+            dec["decidedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            cache[ck] = dec
+            _save_llm_cache(cache)
+            _log("llm: %s -> %s %r" % (sid[:8], dec["emoji"], dec["title"]))
+        if (summ.get("decidedTitle") != dec["title"]
+                or summ.get("symbol") != dec["emoji"]):
+            with STATE_LOCK:
+                summ["rawTitle"] = raw_title
+                summ["decidedTitle"] = dec["title"]
+                summ["symbol"] = dec["emoji"]
+                summ["symbolShortcode"] = dec["shortcode"]
+                summ["decidedAt"] = dec["decidedAt"]
+            changed = True
+    if changed:
+        with STATE_LOCK:
+            try:
+                _write_latest()
+            except OSError:
+                pass
+
+
+def _llm_loop():
+    cache = _load_llm_cache()
+    warned_no_key = False
+    while True:
+        try:
+            api_key = _resolve_openai_key()
+            if not api_key and not warned_no_key:
+                _log("llm: no OpenAI key found (env OPENAI_API_KEY, shell rc,"
+                     " or %s); enrichment disabled" % LLM_KEY_FILE)
+                warned_no_key = True
+            _llm_cycle(cache, api_key)
+        except Exception as e:  # never let the thread die
+            _log("llm: cycle error: %r" % (e,))
+        time.sleep(LLM_CYCLE_S)
+
+
 def _apply(record):
     """Fold one envelope into the aggregated snapshot + per-session logs."""
     STATE["updatedAt"] = record["ts"]
@@ -569,28 +1022,33 @@ class Handler(BaseHTTPRequestHandler):
         ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         _rotate(LOG_FILE, MAX_LOG_BYTES)
         n = 0
-        with open(LOG_FILE, "a") as f:
-            for ev in events:
-                if not isinstance(ev, dict):
-                    continue
-                record = {"ts": ts, **ev}
-                f.write(json.dumps(record, default=str) + "\n")
-                _apply(record)
-                n += 1
-        try:
-            _write_latest()
-        except OSError:
-            pass
+        with STATE_LOCK:
+            with open(LOG_FILE, "a") as f:
+                for ev in events:
+                    if not isinstance(ev, dict):
+                        continue
+                    record = {"ts": ts, **ev}
+                    f.write(json.dumps(record, default=str) + "\n")
+                    _apply(record)
+                    n += 1
+            try:
+                _write_latest()
+            except OSError:
+                pass
         self._respond(200, {"ok": True, "ingested": n})
 
     def do_GET(self):
+        # Serialize under the lock: the LLM thread inserts summary keys, and
+        # json.dumps over a mutating dict raises RuntimeError.
         if self.path.startswith("/state"):
-            return self._respond(200, STATE)
+            with STATE_LOCK:
+                return self._respond(200, STATE)
         if self.path.startswith("/summary"):
-            return self._respond(200, {
-                "sessions": STATE["summary"],
-                "updatedAt": STATE["updatedAt"],
-            })
+            with STATE_LOCK:
+                return self._respond(200, {
+                    "sessions": STATE["summary"],
+                    "updatedAt": STATE["updatedAt"],
+                })
         return self._respond(404, {"error": "unknown path"})
 
     def log_message(self, *args):
@@ -608,6 +1066,7 @@ def main():
     for sid in list(STATE["summary"]):
         _derive_awaiting(_summary_for(sid))
     _backfill_summary()
+    threading.Thread(target=_llm_loop, name="llm-enrich", daemon=True).start()
     HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
 
