@@ -41,7 +41,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 22px;
+  font-size: 15px;
   font-weight: 700;
   color: inherit;
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
@@ -57,7 +57,7 @@
 }
 
 #wc-banner-symbol {
-  font-size: 26px;
+  font-size: 18px;
   line-height: 1;
 }
 
@@ -77,14 +77,25 @@
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   line-height: 1.3;
   margin-bottom: 4px;
-  /* ellipsize to ~10 lines each */
+  /* ellipsize to 3 lines each */
   display: -webkit-box;
-  -webkit-line-clamp: 10;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
 .wc-banner-msg:last-child { margin-bottom: 0; }
+
+/* Links parsed out of message text: short clickable labels, styled like the
+   PR links. The banner is pointer-events:none, so re-enable on the anchors. */
+.wc-banner-msg a {
+  font-size: 10px;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+  text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
+  pointer-events: auto;
+}
 
 #wc-banner-prs {
   display: flex;
@@ -110,17 +121,18 @@
   white-space: nowrap;
 }
 
-/* Awaiting instructions: an animated gradient line across the TOP of the
-   viewport, above the Devin banner (content.js shifts the banner down by the
-   line's height so they never overlap). Geometry and animation are duplicated
-   inline on the element to beat stale stylesheets in long-lived tabs; the
-   @keyframes live only here. */
+/* Awaiting instructions: an animated gradient line. With a banner present it
+   is appended INSIDE the banner as its last child (attached to the bottom
+   edge; the banner never shifts, it just extends downward); on bannerless
+   pages it stays pinned across the top of the viewport. Geometry and
+   animation are duplicated inline on the element to beat stale stylesheets
+   in long-lived tabs; the @keyframes live only here. */
 #wc-await-border {
   position: fixed;
   /* inset/border set explicitly to beat the stale bottom-line rule that
      older injected stylesheets may still carry in long-lived tabs */
   inset: 0 0 auto 0;
-  height: 32px;
+  height: 22px;
   border: 0;
   background: linear-gradient(90deg, #ff6a00, #ffd27a, #ff6a00);
   background-size: 200% 100%;

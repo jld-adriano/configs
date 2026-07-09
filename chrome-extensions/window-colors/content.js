@@ -5,6 +5,14 @@
     try { window.__wcCleanup(); } catch (e) {}
   }
 
+  // Render/refresh cadence. There is deliberately NO MutationObserver and no
+  // per-mutation work: on huge Devin DOMs the old observer (childList+subtree
+  // -> tick -> body.innerText/textContent scans) burned CPU and allocated
+  // multi-MB strings on every SPA re-render. Everything below is driven by
+  // this slow timer plus push events (storage changes, summary responses).
+  const RENDER_INTERVAL_MS = 15 * 1000;
+  const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+
   function hashToHSL(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -441,6 +449,47 @@
 
   let lastBannerState = "";
 
+  // ── Message-row link rendering ────────────────────────────────────────────
+  // Chat messages often carry long URLs that would render as dead strings.
+  // Rows are built from text nodes + real <a> elements (never innerHTML with
+  // unsanitized input), with a very short label per link.
+
+  const MSG_URL_RE = /https?:\/\/[^\s<>"')\]]+/g;
+  const MSG_LINK_LABEL_MAX = 15;
+
+  function msgLinkLabel(href) {
+    const pr = href.match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/);
+    if (pr) return "#" + pr[1];
+    let label;
+    try {
+      label = new URL(href).hostname.replace(/^www\./, "");
+    } catch {
+      label = href.replace(/^https?:\/\//, "");
+    }
+    return label.length > MSG_LINK_LABEL_MAX
+      ? label.slice(0, MSG_LINK_LABEL_MAX) + "…"
+      : label;
+  }
+
+  function renderMsgText(row, text) {
+    let last = 0;
+    for (const m of text.matchAll(MSG_URL_RE)) {
+      if (m.index > last) {
+        row.appendChild(document.createTextNode(text.slice(last, m.index)));
+      }
+      const a = document.createElement("a");
+      a.href = m[0];
+      a.textContent = msgLinkLabel(m[0]);
+      a.target = "_blank";
+      a.rel = "noopener";
+      row.appendChild(a);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) {
+      row.appendChild(document.createTextNode(text.slice(last)));
+    }
+  }
+
   // The banner's chat rows: the last 4 back-and-forth messages (oldest ->
   // newest, as the conversation happened) from the sink's recentMessages,
   // falling back to the older two-field summary shape when absent.
@@ -513,20 +562,32 @@
       for (const [icon, text] of messages) {
         const row = document.createElement("div");
         row.className = "wc-banner-msg";
-        row.textContent = icon + " " + text;
+        renderMsgText(row, icon + " " + text);
         msgs.appendChild(row);
       }
       banner.appendChild(msgs);
     }
 
     document.documentElement.appendChild(banner);
-    syncBannerOffset();
   }
 
   // ── "Awaiting instructions" border ──────────────────────────────────────
   // Chats where the agent has stopped and needs the user get a highlighted
-  // border. Detection is text-based (the phrases the agent apps render), so
-  // it works uniformly for Devin/Capy/Slack/etc.
+  // border.
+  //
+  // Devin sessions: the awaiting flag comes from the devin-stream sink's
+  // per-session summary (`awaiting`, derived server-side from the captured
+  // Devin API: status "suspended" or a status_update with enum "blocked").
+  // NO DOM text scanning: on huge Devin DOMs, body.innerText/textContent
+  // reads allocated multi-MB strings per call (and innerText forced layout),
+  // which is exactly the overhead this extension must not add. If the sink
+  // is unreachable there is simply no awaiting line (fail quiet, mirroring
+  // the PR fail-closed rule) -- never fall back to DOM scanning.
+  //
+  // Capy (and other) pages have no captured stream, so detection stays
+  // text-based there, but cheap: textContent only (no innerText: it forces
+  // layout, and textContent already contains all rendered text), on the slow
+  // render interval, and skipped entirely when the tab is hidden.
   const AWAIT_PATTERNS = [
     /a?waiting (for )?instructions/i,
     /action required/i,
@@ -534,69 +595,79 @@
     /capy is idle/i,
   ];
 
+  let lastTextAwaiting = false;
+
   function isAwaiting() {
+    if (isDevinSession()) {
+      return streamSummary ? !!streamSummary.awaiting : false;
+    }
     if (!document.body) return false;
-    // Check BOTH innerText and textContent: innerText excludes text hidden via
-    // visibility/display (Devin blinks its status element with a CSS
-    // animation, so innerText samples flicker), while textContent includes
-    // hidden text. textContent may also match hidden templates/tooltips --
-    // acceptable, since the phrase list is specific.
-    const rendered = document.body.innerText || "";
+    // Hidden tabs keep reporting the last known state instead of paying for
+    // a fresh multi-MB textContent allocation nobody can see.
+    if (document.hidden) return lastTextAwaiting;
     const full = document.body.textContent || "";
-    return AWAIT_PATTERNS.some((p) => p.test(rendered) || p.test(full));
+    lastTextAwaiting = AWAIT_PATTERNS.some((p) => p.test(full));
+    return lastTextAwaiting;
   }
 
-  // Hysteresis: isAwaiting() reads document.body.innerText, which can briefly
-  // drop the awaiting phrase while the SPA re-renders, making the border flash.
-  // Turn the border on immediately, but only remove it after several
-  // consecutive non-awaiting evaluations.
+  // Hysteresis (non-Devin only): text detection can briefly drop the awaiting
+  // phrase while an SPA re-renders, making the border flash. Turn the border
+  // on immediately, but only remove it after several consecutive non-awaiting
+  // evaluations. Devin's sink-derived flag is stable and skips this.
   const AWAIT_OFF_TICKS = 3;
-  const AWAIT_LINE_PX = 32;
+  const AWAIT_LINE_PX = 22;
   let awaitMissCount = 0;
   let lastAwaiting = null; // stabilized state
 
-  // The awaiting line sits ABOVE the banner (both fixed at the top), so when
-  // it's visible the banner shifts down by the line's height.
-  function syncBannerOffset() {
-    const banner = document.getElementById("wc-banner");
-    if (!banner) return;
-    const line = document.getElementById("wc-await-border");
-    banner.style.top = line ? AWAIT_LINE_PX + "px" : "0px";
-  }
+  // Shared visuals for both placements. Inline so it wins over any stale
+  // injected stylesheet: long-lived tabs keep the style.css they loaded with
+  // and that copy wins the cascade over re-injected CSS, so geometry AND
+  // animation must be inline too (the @keyframes themselves live in
+  // style.css).
+  const AWAIT_LINE_BASE_CSS =
+    "height:" + AWAIT_LINE_PX + "px;border:0;" +
+    "background:linear-gradient(90deg,#ff6a00,#ffd27a,#ff6a00);" +
+    "background-size:200% 100%;box-sizing:border-box;pointer-events:none;" +
+    "animation:wc-await-sweep 1.8s ease-in-out infinite alternate;";
 
   function updateAwaitBorder() {
     let border = document.getElementById("wc-await-border");
     const raw = isAwaiting();
     awaitMissCount = raw ? 0 : awaitMissCount + 1;
-    const awaiting =
-      raw || (lastAwaiting === true && awaitMissCount < AWAIT_OFF_TICKS);
+    const awaiting = isDevinSession()
+      ? raw // sink-derived: stable, no flicker to smooth over
+      : raw || (lastAwaiting === true && awaitMissCount < AWAIT_OFF_TICKS);
     if (lastAwaiting !== null && awaiting !== lastAwaiting) {
       heartbeat(); // push the state flip to the sink promptly
     }
     lastAwaiting = awaiting;
-    if (awaiting) {
-      if (!border) {
-        border = document.createElement("div");
-        border.id = "wc-await-border";
-        border.setAttribute("aria-hidden", "true");
-        // Inline so it wins over any stale injected stylesheet: long-lived
-        // tabs keep the style.css they loaded with (old pulse animation, old
-        // bottom-line geometry) and that copy wins the cascade over
-        // re-injected CSS, so geometry AND animation must be inline too (the
-        // @keyframes themselves live in style.css).
-        border.style.cssText =
-          "position:fixed;left:0;right:0;top:0;bottom:auto;" +
-          "height:" + AWAIT_LINE_PX + "px;border:0;" +
-          "background:linear-gradient(90deg,#ff6a00,#ffd27a,#ff6a00);" +
-          "background-size:200% 100%;box-sizing:border-box;" +
-          "z-index:2147483647;pointer-events:none;" +
-          "animation:wc-await-sweep 1.8s ease-in-out infinite alternate;";
-        document.documentElement.appendChild(border);
-      }
-    } else if (border) {
-      border.remove();
+    if (!awaiting) {
+      if (border) border.remove();
+      return;
     }
-    syncBannerOffset();
+    // When a banner exists the line attaches to its bottom edge (in-flow last
+    // child; negative margins cancel the banner padding so it spans the full
+    // banner width). The banner stays fixed at top:0 and never shifts -- it
+    // only extends downward while awaiting. Bannerless pages (Capy, other
+    // chats) keep the viewport-top line. If the banner was just (re)created
+    // or removed, re-parent by rebuilding.
+    const banner = document.getElementById("wc-banner");
+    const wantParent = banner || document.documentElement;
+    if (border && border.parentNode !== wantParent) {
+      border.remove();
+      border = null;
+    }
+    if (!border) {
+      border = document.createElement("div");
+      border.id = "wc-await-border";
+      border.setAttribute("aria-hidden", "true");
+      border.style.cssText = banner
+        ? "position:static;display:block;margin:5px -12px -5px;" +
+          AWAIT_LINE_BASE_CSS
+        : "position:fixed;left:0;right:0;top:0;bottom:auto;z-index:2147483647;" +
+          AWAIT_LINE_BASE_CSS;
+      wantParent.appendChild(border);
+    }
   }
 
   function tick() {
@@ -622,7 +693,6 @@
           if (el) el.remove();
         }
         lastBannerState = "";
-        syncBannerOffset();
         return;
       }
       updateBanner();
@@ -636,7 +706,6 @@
           const el = document.getElementById(id);
           if (el) el.remove();
         }
-        syncBannerOffset();
         return;
       }
       if (!document.getElementById("wc-badge")) createBadge();
@@ -653,21 +722,29 @@
   heartbeat();
   refreshStreamSummary();
 
-  // SPA content updates in place, so re-evaluate on DOM changes and a timer.
-  const observer = new MutationObserver(tick);
-  if (document.body) {
-    observer.observe(document.body, { childList: true, subtree: true });
-  }
-  const tickTimer = setInterval(tick, 2000);
+  // No MutationObserver: a childList+subtree observer on a busy Devin SPA
+  // fires tick() on every DOM change, and the old text-scanning tick made
+  // that a multi-MB allocation + forced layout per mutation burst. The HUD
+  // is now driven by a slow timer (which also picks up SPA navigation via
+  // the URL/title reads in tick()) plus push events: storage changes and
+  // stream-summary responses both call tick() directly.
+  const tickTimer = setInterval(() => {
+    if (document.hidden) return; // nothing visible to render; scan nothing
+    tick();
+  }, RENDER_INTERVAL_MS);
+  const onVisible = () => {
+    if (!document.hidden) tick();
+  };
+  document.addEventListener("visibilitychange", onVisible);
   const hbTimer = setInterval(() => {
     heartbeat();
     refreshStreamSummary();
-  }, 30000);
+  }, HEARTBEAT_INTERVAL_MS);
 
   window.__wcCleanup = function () {
-    observer.disconnect();
     clearInterval(tickTimer);
     clearInterval(hbTimer);
+    document.removeEventListener("visibilitychange", onVisible);
     try { chrome.storage.onChanged.removeListener(onStorageChanged); } catch (e) {}
     for (const id of ["wc-badge", "wc-banner", "wc-await-border", "wc-hud-toggle"]) {
       const el = document.getElementById(id);
