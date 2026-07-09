@@ -487,6 +487,36 @@
     return out;
   }
 
+  function toggleDebugPanel() {
+    const existing = document.getElementById("wc-debug-panel");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const panel = document.createElement("div");
+    panel.id = "wc-debug-panel";
+    const close = document.createElement("div");
+    close.id = "wc-debug-close";
+    close.textContent = "✕";
+    close.addEventListener("click", () => panel.remove());
+    const pre = document.createElement("pre");
+    const data = {
+      sessionKey: getStableKey(),
+      tabReport: {
+        loaded: isDevinSession() ? devinSessionLoaded() : capyThreadLoaded(),
+        awaiting: isAwaiting(),
+        color: currentColor(),
+        symbol: currentSymbol(),
+        ...memoryInfo(),
+      },
+      sinkSummary: streamSummary,
+    };
+    pre.textContent = JSON.stringify(data, null, 2);
+    panel.appendChild(close);
+    panel.appendChild(pre);
+    document.documentElement.appendChild(panel);
+  }
+
   function updateBanner() {
     // Prefer the sink's LLM-decided title/symbol; fall back to the tab title
     // (raw session title) and the registry/hash symbol when the sink has no
@@ -516,6 +546,7 @@
     sym.id = "wc-banner-symbol";
     sym.textContent = symbol;
     const titleText = document.createElement("span");
+    titleText.id = "wc-banner-title-text";
     titleText.textContent = title;
     // Hover shows the raw (wire) title when the LLM rewrote it.
     if (streamSummary && streamSummary.decidedTitle) {
@@ -524,6 +555,18 @@
     titleRow.appendChild(sym);
     titleRow.appendChild(titleText);
     banner.appendChild(titleRow);
+
+    // Small debug affordance: reveals the raw sink summary + this tab's own
+    // report that every determination (awaiting, PRs, title/symbol) is based on.
+    const dbg = document.createElement("span");
+    dbg.id = "wc-banner-debug";
+    dbg.textContent = "ⓘ";
+    dbg.title = "Show underlying data";
+    dbg.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleDebugPanel();
+    });
+    titleRow.appendChild(dbg);
 
     if (prs.size) {
       const prRow = document.createElement("div");
@@ -733,7 +776,8 @@
     clearInterval(hbTimer);
     document.removeEventListener("visibilitychange", onVisible);
     try { chrome.storage.onChanged.removeListener(onStorageChanged); } catch (e) {}
-    for (const id of ["wc-badge", "wc-banner", "wc-await-border", "wc-hud-toggle"]) {
+    for (const id of ["wc-badge", "wc-banner", "wc-await-border",
+                      "wc-hud-toggle", "wc-debug-panel"]) {
       const el = document.getElementById(id);
       if (el) el.remove();
     }

@@ -404,6 +404,8 @@ function renderCard(s) {
     msgsHtml +
     prsHtml +
     streamHtml +
+    `<details class="card-debug"><summary>{ }</summary>` +
+    `<pre>${esc(JSON.stringify(s, null, 2))}</pre></details>` +
     `</div>`
   );
 }
