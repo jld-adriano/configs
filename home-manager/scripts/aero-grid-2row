@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Arrange the focused workspace's windows into a 2-row grid (aero-grid-2row).
+
+Bound to alt-shift-v. AeroSpace has no native grid layout, so this builds one
+from tree ops: flatten the workspace, set the root container to v_tiles (two
+rows stacked vertically), then group the windows into two nested h_tiles row
+containers. The top row gets ceil(N/2) windows and the bottom row floor(N/2).
+
+Command sequence (found experimentally on 0.20.0-Beta, with the default
+normalizations enabled — nested containers auto-take the opposite orientation,
+so a container joined inside the v_tiles root becomes h_tiles):
+  1. flatten-workspace-tree            -> root is a flat list of N windows
+  2. layout v_tiles                    -> root container becomes vertical
+  3. join-with down --window-id <first bottom-row window>
+                                       -> wraps it + the window below into an
+                                          h_tiles container (the bottom row)
+  4. move up --window-id <w>           -> each remaining bottom-row window
+                                          enters the container directly above
+  5. same join/move for the top row
+  6. balance-sizes
+
+Every op drives an explicit window-id (order re-read after the flatten), so
+the result is deterministic regardless of which window is focused. Edge cases:
+0/1 windows are a no-op; 2 windows become one full-width row each (v_tiles);
+odd counts put the extra window in the top row.
+
+Only touches the currently focused workspace.
+"""
+
+import math
+import subprocess
+import sys
+import time
+
+
+def run(args):
+    return subprocess.run(
+        ["aerospace"] + args, capture_output=True, text=True, timeout=15
+    ).stdout.strip()
+
+
+def aero(args):
+    """Run an aerospace tree op with a small settle delay.
+
+    The ops apply asynchronously in the server; firing them back-to-back with
+    no gap can act on stale tree state.
+    """
+    run(args)
+    time.sleep(0.1)
+
+
+def workspace_windows(ws):
+    """Window ids of a workspace, in tree (DFS) order."""
+    out = run(["list-windows", "--workspace", ws, "--format", "%{window-id}"])
+    return [int(line.strip()) for line in out.splitlines() if line.strip()]
+
+
+def main():
+    ws = run(["list-workspaces", "--focused"])
+    if not ws:
+        print("No focused workspace")
+        return 1
+    orig_focus = run(["list-windows", "--focused", "--format", "%{window-id}"])
+
+    n = len(workspace_windows(ws))
+    if n < 2:
+        print(f"Workspace {ws}: {n} window(s), nothing to arrange")
+        return 0
+
+    aero(["flatten-workspace-tree", "--workspace", ws])
+    wids = workspace_windows(ws)  # deterministic order for this run
+    n = len(wids)
+
+    # Root vertical = the two rows stack top-to-bottom. For n == 2 this alone
+    # is the grid: one full-width window per row.
+    aero(["layout", "v_tiles", "--window-id", str(wids[0])])
+
+    top = wids[: math.ceil(n / 2)]
+    bottom = wids[math.ceil(n / 2):]
+
+    # Build each row: join the row's first two windows into a nested h_tiles
+    # container, then pull the rest of the row's windows up into it one by
+    # one (each is directly below the container at that point). Bottom row
+    # first, so the top-row joins never see bottom windows as neighbors.
+    for row in (bottom, top):
+        if len(row) < 2:
+            continue  # single window is its own full-width row
+        aero(["join-with", "down", "--window-id", str(row[0])])
+        for wid in row[2:]:
+            aero(["move", "up", "--window-id", str(wid)])
+
+    aero(["balance-sizes", "--workspace", ws])
+
+    if orig_focus:
+        run(["focus", "--window-id", orig_focus])
+
+    print(f"Workspace {ws}: {n} windows -> 2-row grid "
+          f"({len(top)} top / {len(bottom)} bottom)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

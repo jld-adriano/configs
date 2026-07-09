@@ -40,7 +40,7 @@ WINDOW NAVIGATION (vim-style)
 LAYOUT
   alt-f              → Toggle fullscreen
   alt-shift-f        → Reset layout (horizontal tiles)
-  alt-shift-v        → Vertical tiles (rows)
+  alt-shift-v        → 2-row grid (top/bottom rows)
   alt-ctrl-f         → All workspaces to accordion
   alt-b              → Balance sizes
   alt-d              → Distribute windows evenly
