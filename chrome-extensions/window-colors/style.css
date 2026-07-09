@@ -16,12 +16,15 @@
   animation: none;
 }
 
-/* Devin sessions: full-width top banner instead of the corner badge */
+/* Devin sessions: top banner instead of the corner badge. Anchored top-left
+   and capped at 600px so the page's top-right stays visible on wide screens */
 #wc-banner {
   position: fixed;
   top: 0;
   left: 0;
-  right: 0;
+  right: auto;
+  max-width: 600px;
+  border-bottom-right-radius: 10px;
   z-index: 2147483647;
   pointer-events: none;
   padding: 4px 12px 5px;
