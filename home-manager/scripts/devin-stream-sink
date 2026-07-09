@@ -24,10 +24,29 @@ On top of the raw capture we maintain a clean per-session SUMMARY, folded from
 the captured Devin API payloads as they arrive (and backfilled from
 events.jsonl on first start):
 
-    summary[sessionId] = {title, status, prs: [{number,title,url,state,merged,
+    summary[sessionId] = {title, status, statusEnum, statusMessage,
+                          statusEnumAt, awaiting,
+                          prs: [{number,title,url,state,merged,
                           draft}], lastHumanMessage, lastAgentMessage,
                           recentMessages: [{role: "human"|"agent", text, ts}]
                           (last 4 chat messages, oldest -> newest), lastSeen}
+
+`awaiting` is derived here (single source of truth) so consumers -- notably
+the window-colors extension's banner/awaiting line -- never need to scan the
+page DOM. Mapping, cross-validated 2026-07-09 against the text-based awaiting
+flags the window-colors content script used to compute from page text:
+
+    status:  "running" | "suspended" | "completed"   (session lifecycle)
+    enum:    "blocked" | "working" | "finished"      (status_update events /
+                                                      latest_status_contents)
+
+    awaiting = (enum == "blocked")          # "Waiting for your response"
+               or (status == "suspended")   # asleep ("Devin went to sleep",
+                                            # incl. crashed/user_inactivity)
+
+Every tab whose text scan said awaiting=true and that had sink coverage was
+either suspended, or running with enum "blocked"; enum "working" ("Devin is
+thinking...") and plain running sessions were never text-awaiting.
 
 Payload sources (documented from captured traffic):
   * GET .../v2sessions            -> result[]: devin_id, title, status,
@@ -132,6 +151,19 @@ AGENT_MSG_TYPES = {"devin_message"}
 # datetime.fromisoformat can parse the timestamp.
 _FRAC = re.compile(r"(\.\d{6})\d+")
 _SESSION_API = re.compile(r"/api/sessions/devin-([0-9a-f]+)(/prs)?$")
+# v2sessions bodies are truncated at 24KB by the extension, so only the
+# leading 1-2 session objects survive JSON decoding -- but the truncated TAIL
+# still names every session. These regexes sweep the raw body for
+# (devin_id, status) pairs and each object's latest_status_contents (a flat
+# object), which is what the awaiting derivation needs. The tempered
+# (?!"devin_id") guard keeps a match from spilling into the next session
+# object when a field is missing.
+_V2_SID_STATUS = re.compile(
+    r'"devin_id":\s*"devin-([0-9a-f]+)",\s*"status":\s*"(\w+)"')
+_V2_SID_STATUS_CONTENTS = re.compile(
+    r'"devin_id":\s*"devin-([0-9a-f]+)"'
+    r'(?:(?!"devin_id":)[\s\S]){0,30000}?'
+    r'"latest_status_contents":\s*(\{(?:[^{}"]|"(?:[^"\\]|\\.)*")*\})')
 # /prs bodies are truncated at 24KB by the extension, so they can't be
 # json.loads'd; the leading fields of each item are extracted with a regex.
 _PR_ITEM = re.compile(
@@ -158,12 +190,18 @@ def _trunc_msg(text, limit=MSG_TRUNC):
 def _summary_for(sid):
     summ = STATE["summary"].setdefault(sid, {
         "title": None, "status": None, "prs": [],
+        "statusEnum": None, "statusEnumAt": None, "statusMessage": None,
+        "awaiting": False,
         "lastHumanMessage": None, "lastHumanMessageAt": None,
         "lastAgentMessage": None, "lastAgentMessageAt": None,
         "recentMessages": [],
         "lastSeen": None,
     })
-    summ.setdefault("recentMessages", [])  # entries persisted pre-field
+    # Entries loaded from latest.json may predate newer fields.
+    summ.setdefault("recentMessages", [])
+    for k in ("statusEnum", "statusEnumAt", "statusMessage"):
+        summ.setdefault(k, None)
+    summ.setdefault("awaiting", False)
     return summ
 
 
@@ -235,6 +273,34 @@ def _note_recent(summ, role, text, ts):
     del recent[:-RECENT_MSGS]
 
 
+def _derive_awaiting(summ):
+    """awaiting = needs the user: blocked on a response, or asleep.
+
+    Mapping derived by cross-validating captured statuses against the old
+    text-based detection (see module docstring). "blocked" comes from
+    status_update events ("Waiting for your response"); "suspended" covers
+    sleep from user inactivity and crashes ("Devin went to sleep").
+    """
+    summ["awaiting"] = (summ.get("statusEnum") == "blocked"
+                        or summ.get("status") == "suspended")
+
+
+def _note_status(summ, enum, message, ts):
+    """Record a status_update if it's newer (by its own timestamp).
+
+    Sources re-send old contents (v2sessions polls carry
+    latest_status_contents on every poll), so newest-timestamp-wins, same as
+    _note_message. An untimestamped update only fills an empty slot.
+    """
+    if not enum:
+        return
+    if _epoch(ts) >= _epoch(summ.get("statusEnumAt")):
+        summ["statusEnum"] = enum
+        summ["statusEnumAt"] = ts
+        summ["statusMessage"] = _trunc_msg(message, 120) if message else None
+    _derive_awaiting(summ)
+
+
 def _note_pr(summ, url, state=None, draft=None, merged=None):
     if not url:
         return
@@ -292,12 +358,41 @@ def _fold_session_obj(obj, ts):
         summ["title"] = obj["title"]
     if obj.get("status"):
         summ["status"] = obj["status"]
+        _derive_awaiting(summ)
+    lsc = obj.get("latest_status_contents")
+    if isinstance(lsc, dict):
+        _note_status(summ, lsc.get("enum"), lsc.get("message"),
+                     lsc.get("timestamp") or obj.get("latest_status_event_at"))
     for pr in obj.get("pull_requests") or []:
         if isinstance(pr, dict):
             _note_pr(summ, pr.get("pr_url"),
                      state=pr.get("state"), draft=pr.get("draft"))
     _note_message(summ, obj.get("initial_user_message_contents"))
     _note_message(summ, obj.get("latest_message_contents"))
+
+
+def _sweep_v2_statuses(body, ts):
+    """Recover (status, latest_status_contents) from a truncated v2sessions
+    body for EVERY session named in it, not just the 1-2 leading objects that
+    survive JSON decoding. Idempotent with the decoded path."""
+    for m in _V2_SID_STATUS.finditer(body):
+        sid = _safe_session_id(m.group(1))
+        if not sid:
+            continue
+        summ = _summary_for(sid)
+        summ["lastSeen"] = ts
+        summ["status"] = m.group(2)
+        _derive_awaiting(summ)
+    for m in _V2_SID_STATUS_CONTENTS.finditer(body):
+        sid = _safe_session_id(m.group(1))
+        if not sid:
+            continue
+        try:
+            lsc = json.loads(m.group(2))
+        except ValueError:
+            continue
+        _note_status(_summary_for(sid), lsc.get("enum"), lsc.get("message"),
+                     lsc.get("timestamp"))
 
 
 def _fold_net(record):
@@ -322,7 +417,11 @@ def _fold_net(record):
         if sid and isinstance(ev, dict):
             summ = _summary_for(sid)
             summ["lastSeen"] = ts
-            _note_message(summ, ev)
+            if ev.get("type") == "status_update":
+                _note_status(summ, ev.get("enum"), ev.get("message"),
+                             ev.get("timestamp"))
+            else:
+                _note_message(summ, ev)
         return
 
     url = (d.get("url") or "").split("?")[0]
@@ -335,6 +434,7 @@ def _fold_net(record):
         for obj in items:
             if isinstance(obj, dict):
                 _fold_session_obj(obj, ts)
+        _sweep_v2_statuses(body, ts)
         return
 
     # Message-history endpoint: /api/events/devin-<id>/stream returns
@@ -500,7 +600,13 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     os.makedirs(SESSIONS_DIR, exist_ok=True)
     _load_latest()
-    STATE["summary"] = {}
+    # Keep the persisted summary rather than resetting it: at current capture
+    # volume the retained event logs rotate away within minutes, so a fresh
+    # backfill forgets the accumulated status of every session without very
+    # recent traffic. Re-derive awaiting under current rules, then re-fold the
+    # retained logs on top (idempotent, newest-timestamp-wins).
+    for sid in list(STATE["summary"]):
+        _derive_awaiting(_summary_for(sid))
     _backfill_summary()
     HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 

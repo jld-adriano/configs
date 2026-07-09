@@ -24,6 +24,8 @@
   var LS_SAMPLE_CHARS = 800;
   var DISCOVERY_PERIOD_MS = 60000;
   var NET_FLUSH_MS = 1500;
+  var CONTEXT_PERIOD_MS = 15000; // session context heartbeat (was 5s; the
+                                 // textContent scan is the expensive part)
 
   function sessionId() {
     var m = location.href.match(/app\.devin\.ai\/sessions\/([a-f0-9-]{8,})/i);
@@ -39,9 +41,18 @@
     /waiting for instructions/i, /action required/i,
     /devin went to sleep/i, /devin is waiting/i, /awaiting your/i,
   ];
+  // textContent, never innerText: innerText forces layout, and Devin DOMs are
+  // huge (the sink's summary.awaiting -- derived from captured API traffic --
+  // is the authoritative signal now; this text flag is a secondary hint).
+  // Hidden tabs reuse the last value instead of re-allocating a multi-MB
+  // string nobody can see.
+  var lastTextAwaiting = false;
   function isAwaiting() {
-    var text = document.body ? document.body.innerText : "";
-    return AWAIT_PATTERNS.some(function (p) { return p.test(text); });
+    if (!document.body) return lastTextAwaiting;
+    if (document.hidden) return lastTextAwaiting;
+    var text = document.body.textContent || "";
+    lastTextAwaiting = AWAIT_PATTERNS.some(function (p) { return p.test(text); });
+    return lastTextAwaiting;
   }
 
   function send(kind, data) {
@@ -212,7 +223,7 @@
     boot();
   }
   setInterval(runDiscovery, DISCOVERY_PERIOD_MS);
-  setInterval(sessionContext, 5000);
+  setInterval(sessionContext, CONTEXT_PERIOD_MS);
 
   window.__devinStreamContentCleanup = function () {};
 })();
