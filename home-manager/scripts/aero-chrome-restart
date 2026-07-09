@@ -4,20 +4,21 @@
 Recovery ritual for when Chrome's memory is beyond saving:
   1. one confirmation dialog up front (Cancel aborts silently)
   2. lock the current layout via aero-layout-lock (no screenshots,
-     labelled "chrome-restart")
+     labelled "chrome-restart") — the snapshot captures every window's
+     tabs, so it's a complete record of what to reopen
   3. quit Chrome gracefully and wait for the process to exit
-  4. relaunch Chrome and wait for session restore to bring windows back
-  5. reapply the snapshot non-interactively (aero-layout-apply's
-     apply_snapshot with its confirm() stubbed to False, so it never
-     tries to reopen windows itself — session restore handles that)
+  4. relaunch Chrome and wait for it to be responsive
+  5. reapply the snapshot non-interactively with aero-layout-apply's
+     confirm() stubbed to True, so its Chrome-restore step reopens every
+     snapshot window (with its tabs) and places it on its workspace
+
+This deliberately does NOT rely on Chrome's native "Continue where you
+left off" — our own lock/restore is more reliable and independent of any
+Chrome setting. Chrome comes back empty and we rebuild it from the lock.
 
 Progress is reported via notifications at each phase. If Chrome isn't
 running at the start, the quit step is skipped (lock + launch + apply
 still run).
-
-Depends on Chrome's "Continue where you left off" startup setting
-(session.restore_on_startup == 1); if that appears off, the
-confirmation dialog carries a warning.
 """
 
 import datetime
@@ -34,12 +35,10 @@ SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 LOCK = os.path.join(SCRIPTS, "aero-layout-lock")
 APPLY = os.path.join(SCRIPTS, "aero-layout-apply")
 HISTORY_DIR = os.path.expanduser("~/.local/state/aerospace/history")
-CHROME_DIR = os.path.expanduser("~/Library/Application Support/Google/Chrome")
 LABEL = "chrome-restart"
 
 QUIT_TIMEOUT = 60        # seconds to wait for Chrome to exit
-RESTORE_TIMEOUT = 300    # seconds to wait for session restore
-RESTORE_POLL = 5         # seconds between window-count polls
+READY_TIMEOUT = 60       # seconds to wait for relaunched Chrome to respond
 LOCK_TIMEOUT = 240       # capture_order focuses windows; slow with many
 
 
@@ -75,25 +74,9 @@ def chrome_window_count():
         return None
 
 
-def session_restore_enabled():
-    """True if any Chrome profile has "Continue where you left off" on."""
-    for path in glob.glob(os.path.join(CHROME_DIR, "*", "Preferences")):
-        try:
-            with open(path) as f:
-                prefs = json.load(f)
-        except Exception:
-            continue
-        if prefs.get("session", {}).get("restore_on_startup") == 1:
-            return True
-    return False
-
-
 def confirm_restart():
     """One up-front dialog; returns True only if the user picks Restart."""
-    msg = "Restart Chrome? (locks layout, quits, restores, reapplies)"
-    if not session_restore_enabled():
-        msg += ("\n\n⚠️ Chrome's 'Continue where you left off' looks OFF — "
-                "windows may not come back on relaunch!")
+    msg = "Restart Chrome? (locks layout, quits, reopens windows, reapplies)"
     quoted = msg.replace("\\", "\\\\").replace('"', '\\"')
     script = (
         'tell application "System Events"\n'
@@ -144,30 +127,16 @@ def quit_chrome():
     return not chrome_running()
 
 
-def wait_for_restore(target):
-    """Poll window count until it nears the pre-quit count or plateaus.
-
-    Tabs restore lazily; windows merely existing is enough for placement.
-    Returns the final observed window count.
-    """
-    goal = max(1, int(target * 0.9)) if target else 1
-    deadline = time.time() + RESTORE_TIMEOUT
-    last, streak, count = None, 0, 0
+def wait_for_chrome_ready():
+    """Wait until the relaunched Chrome answers AppleScript (it comes up
+    empty; our apply step rebuilds the windows). Returns True once ready."""
+    deadline = time.time() + READY_TIMEOUT
     while time.time() < deadline:
-        time.sleep(RESTORE_POLL)
-        count = chrome_window_count()
-        if count is None:
-            continue
-        if count >= goal:
-            return count
-        if count > 0 and count == last:
-            streak += 1
-            if streak >= 3:  # plateaued: restore finished short of goal
-                return count
-        else:
-            streak = 0
-        last = count
-    return count or 0
+        time.sleep(2)
+        if chrome_running() and chrome_window_count() is not None:
+            time.sleep(2)  # small settle so `make new window` is reliable
+            return True
+    return chrome_running()
 
 
 def load_apply_module():
@@ -199,23 +168,26 @@ def main():
                    "(close blocking dialogs and retry)")
             sys.exit(1)
 
-    notify("⏳ Relaunching Chrome, waiting for session restore…")
+    notify("⏳ Relaunching Chrome…")
     subprocess.run(["open", "-a", "Google Chrome"], timeout=30)
-    restored = wait_for_restore(pre_count)
+    if not wait_for_chrome_ready():
+        notify("❌ Chrome didn't come back up — aborting before reapply")
+        sys.exit(1)
 
-    notify(f"⏳ Reapplying layout ({restored}/{pre_count} windows back)…")
+    notify(f"⏳ Reopening {pre_count} windows from the lock…")
     with open(snap_path) as f:
         snap = json.load(f)
     mod = load_apply_module()
-    # Never let apply_snapshot pop its "Reopen missing Chrome windows?"
-    # dialog: session restore is responsible for bringing windows back.
-    mod.confirm = lambda msg: False
+    # Chrome relaunched empty, so let apply_snapshot's Chrome-restore step
+    # reopen every snapshot window (with its tabs) rather than depending on
+    # Chrome's native session restore. confirm() stubbed True = "yes, reopen".
+    mod.confirm = lambda msg: True
     stamp = datetime.datetime.now().strftime("%H:%M:%S")
     mod.apply_snapshot(snap, f"chrome-restart {stamp}")
 
     final = chrome_window_count() or 0
-    notify(f"✅ Chrome restarted: {final}/{pre_count} windows restored "
-           "and layout reapplied")
+    notify(f"✅ Chrome restarted: {final}/{pre_count} windows reopened "
+           "and placed")
 
 
 if __name__ == "__main__":
