@@ -75,7 +75,15 @@ def chrome_window_count():
 
 
 def confirm_restart():
-    """One up-front dialog; returns True only if the user picks Restart."""
+    """One up-front dialog; returns True only if the user picks Restart.
+
+    Uses the System Events + activate pattern that already works from
+    AeroSpace keybinds elsewhere in this repo (aero-layout-apply's
+    pick_state, aero-layout-lock's confirm_screenshots), plus `giving up
+    after` so it can never hang.  Only an explicit Cancel (AppleScript
+    error -128) exits silently; a give-up or any other osascript failure
+    is surfaced via notification so the keybind is never a silent no-op.
+    """
     msg = "Restart Chrome? (locks layout, quits, reopens windows, reapplies)"
     quoted = msg.replace("\\", "\\\\").replace('"', '\\"')
     script = (
@@ -84,15 +92,34 @@ def confirm_restart():
         f'  display dialog "{quoted}" '
         'with title "Chrome Restart" '
         'buttons {"Cancel", "Restart"} default button "Restart" '
-        'cancel button "Cancel"\n'
+        'cancel button "Cancel" giving up after 60\n'
         'end tell'
     )
-    # osascript exits nonzero ("User canceled") when Cancel is pressed
-    res = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True, text=True, timeout=300,
-    )
-    return res.returncode == 0 and "button returned:Restart" in res.stdout
+    try:
+        res = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=90,
+        )
+    except Exception:
+        notify("❌ Confirmation dialog hung — aborting, Chrome untouched")
+        return False
+
+    if res.returncode == 0:
+        if "gave up:true" in res.stdout:
+            notify("Confirmation timed out (60s) — Chrome untouched")
+            return False
+        return "button returned:Restart" in res.stdout
+
+    # Cancel raises AppleScript error -128 (osascript exits nonzero); that
+    # is a deliberate user choice, so stay quiet.  Anything else means the
+    # dialog itself failed to display (e.g. missing Automation/TCC grant
+    # for the launching process) — say so instead of vanishing.
+    if "-128" in res.stderr:
+        return False
+    err = (res.stderr.strip().splitlines() or ["unknown error"])[-1]
+    err = err.replace("\\", "").replace('"', "'")[:140]
+    notify(f"❌ Couldn't show confirmation: {err}")
+    return False
 
 
 def lock_layout():
