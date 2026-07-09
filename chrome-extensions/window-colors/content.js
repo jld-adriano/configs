@@ -384,22 +384,6 @@
     titleRow.appendChild(titleText);
     banner.appendChild(titleRow);
 
-    // Last chat messages (from the devin-stream captured-API summary): the
-    // most recent human message and the most recent agent CHAT message
-    // (reasoning/tool events are excluded sink-side).
-    if (lastHuman || lastAgent) {
-      const msgs = document.createElement("div");
-      msgs.id = "wc-banner-msgs";
-      for (const [icon, text] of [["👤", lastHuman], ["🤖", lastAgent]]) {
-        if (!text) continue;
-        const row = document.createElement("div");
-        row.className = "wc-banner-msg";
-        row.textContent = icon + " " + text;
-        msgs.appendChild(row);
-      }
-      banner.appendChild(msgs);
-    }
-
     if (prs.size) {
       const prRow = document.createElement("div");
       prRow.id = "wc-banner-prs";
@@ -412,6 +396,23 @@
         prRow.appendChild(a);
       }
       banner.appendChild(prRow);
+    }
+
+    // Last chat messages (from the devin-stream captured-API summary): the
+    // most recent human message and the most recent agent CHAT message
+    // (reasoning/tool events are excluded sink-side). Rendered below the PR
+    // list, set off by a separator line.
+    if (lastHuman || lastAgent) {
+      const msgs = document.createElement("div");
+      msgs.id = "wc-banner-msgs";
+      for (const [icon, text] of [["👤", lastHuman], ["🤖", lastAgent]]) {
+        if (!text) continue;
+        const row = document.createElement("div");
+        row.className = "wc-banner-msg";
+        row.textContent = icon + " " + text;
+        msgs.appendChild(row);
+      }
+      banner.appendChild(msgs);
     }
 
     document.documentElement.appendChild(banner);
