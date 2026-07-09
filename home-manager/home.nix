@@ -1078,6 +1078,30 @@ in {
     };
   };
 
+  # Periodic AeroSpace layout lock: every 3h, snapshot the window layout
+  # without screenshots (fast, no screen flashes) and label it "auto" so the
+  # aero-layout-apply picker shows it as [auto]. StartInterval only (no
+  # RunAtLoad) so reloading home-manager doesn't fire an immediate lock.
+  launchd.agents.aero-layout-autolock = {
+    enable = true;
+    config = {
+      Label = "local.aero-layout-autolock";
+      ProgramArguments = [
+        "/usr/bin/python3"
+        "${config.home.homeDirectory}/projs/configs/home-manager/scripts/aero-layout-lock"
+      ];
+      RunAtLoad = false;
+      StartInterval = 10800;
+      EnvironmentVariables = {
+        PATH = "/run/current-system/sw/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+        AERO_LOCK_NO_SHOTS = "1";
+        AERO_LOCK_LABEL = "auto";
+      };
+      StandardOutPath = "/tmp/aero-autolock.out.log";
+      StandardErrorPath = "/tmp/aero-autolock.err.log";
+    };
+  };
+
   # Serve the Devin session dashboard (chrome-extensions/dashboard/) on :48293
   # so it's always up; the devin-dashboard script (no args) just opens it.
   launchd.agents.devin-dashboard = {
