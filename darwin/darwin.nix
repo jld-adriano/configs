@@ -29,6 +29,7 @@
   #   alt-ctrl-j      - Scroll Devin/Capy Chrome tabs to most recent message
   #   alt-shift-s     - Lock current window layout (snapshot)
   #   alt-shift-a     - Reapply locked layout (best-effort; leftovers organized)
+  #   alt-ctrl-r      - Restart Chrome atomically (lock → quit → restore → reapply)
   #   alt-?           - Show this help
   #
   # =============================================================================
@@ -275,6 +276,9 @@
           
           # Reload all Chrome tabs
           "alt-shift-r" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-reload-windows";
+          
+          # Restart Chrome atomically: lock layout → quit → session-restore → reapply
+          "alt-ctrl-r" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-chrome-restart";
           
           # Scroll all Slack windows to the most recent message
           "alt-ctrl-j" = "exec-and-forget ~/projs/configs/home-manager/scripts/aero-scroll-bottom";

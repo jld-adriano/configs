@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Atomically restart Google Chrome, preserving the window layout.
+
+Recovery ritual for when Chrome's memory is beyond saving:
+  1. one confirmation dialog up front (Cancel aborts silently)
+  2. lock the current layout via aero-layout-lock (no screenshots,
+     labelled "chrome-restart")
+  3. quit Chrome gracefully and wait for the process to exit
+  4. relaunch Chrome and wait for session restore to bring windows back
+  5. reapply the snapshot non-interactively (aero-layout-apply's
+     apply_snapshot with its confirm() stubbed to False, so it never
+     tries to reopen windows itself — session restore handles that)
+
+Progress is reported via notifications at each phase. If Chrome isn't
+running at the start, the quit step is skipped (lock + launch + apply
+still run).
+
+Depends on Chrome's "Continue where you left off" startup setting
+(session.restore_on_startup == 1); if that appears off, the
+confirmation dialog carries a warning.
+"""
+
+import datetime
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import time
+
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+LOCK = os.path.join(SCRIPTS, "aero-layout-lock")
+APPLY = os.path.join(SCRIPTS, "aero-layout-apply")
+HISTORY_DIR = os.path.expanduser("~/.local/state/aerospace/history")
+CHROME_DIR = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+LABEL = "chrome-restart"
+
+QUIT_TIMEOUT = 60        # seconds to wait for Chrome to exit
+RESTORE_TIMEOUT = 300    # seconds to wait for session restore
+RESTORE_POLL = 5         # seconds between window-count polls
+LOCK_TIMEOUT = 240       # capture_order focuses windows; slow with many
+
+
+def notify(msg):
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "{msg}" with title "Chrome Restart"'],
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def chrome_running():
+    return subprocess.run(
+        ["pgrep", "-x", "Google Chrome"], capture_output=True,
+    ).returncode == 0
+
+
+def chrome_window_count():
+    """Count Chrome windows via AppleScript; None if unreadable."""
+    if not chrome_running():
+        return 0
+    try:
+        out = subprocess.run(
+            ["osascript", "-e",
+             'tell application "Google Chrome" to count of windows'],
+            capture_output=True, text=True, timeout=20,
+        ).stdout.strip()
+        return int(out)
+    except Exception:
+        return None
+
+
+def session_restore_enabled():
+    """True if any Chrome profile has "Continue where you left off" on."""
+    for path in glob.glob(os.path.join(CHROME_DIR, "*", "Preferences")):
+        try:
+            with open(path) as f:
+                prefs = json.load(f)
+        except Exception:
+            continue
+        if prefs.get("session", {}).get("restore_on_startup") == 1:
+            return True
+    return False
+
+
+def confirm_restart():
+    """One up-front dialog; returns True only if the user picks Restart."""
+    msg = "Restart Chrome? (locks layout, quits, restores, reapplies)"
+    if not session_restore_enabled():
+        msg += ("\n\n⚠️ Chrome's 'Continue where you left off' looks OFF — "
+                "windows may not come back on relaunch!")
+    quoted = msg.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        'tell application "System Events"\n'
+        '  activate\n'
+        f'  display dialog "{quoted}" '
+        'with title "Chrome Restart" '
+        'buttons {"Cancel", "Restart"} default button "Restart" '
+        'cancel button "Cancel"\n'
+        'end tell'
+    )
+    # osascript exits nonzero ("User canceled") when Cancel is pressed
+    res = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=300,
+    )
+    return res.returncode == 0 and "button returned:Restart" in res.stdout
+
+
+def lock_layout():
+    """Run aero-layout-lock (no screenshots); return the snapshot path."""
+    started = time.time()
+    env = dict(os.environ)
+    env["AERO_LOCK_NO_SHOTS"] = "1"
+    env["AERO_LOCK_LABEL"] = LABEL
+    res = subprocess.run([LOCK], env=env, timeout=LOCK_TIMEOUT)
+    if res.returncode != 0:
+        return None
+
+    candidates = glob.glob(
+        os.path.join(HISTORY_DIR, f"layout-{LABEL}-*.json"))
+    fresh = [p for p in candidates if os.path.getmtime(p) >= started - 5]
+    if not fresh:
+        return None
+    return max(fresh, key=os.path.getmtime)
+
+
+def quit_chrome():
+    """Graceful quit; True once the process is gone (no kill -9 fallback)."""
+    subprocess.run(
+        ["osascript", "-e", 'tell application "Google Chrome" to quit'],
+        capture_output=True, timeout=30,
+    )
+    deadline = time.time() + QUIT_TIMEOUT
+    while time.time() < deadline:
+        if not chrome_running():
+            return True
+        time.sleep(1)
+    return not chrome_running()
+
+
+def wait_for_restore(target):
+    """Poll window count until it nears the pre-quit count or plateaus.
+
+    Tabs restore lazily; windows merely existing is enough for placement.
+    Returns the final observed window count.
+    """
+    goal = max(1, int(target * 0.9)) if target else 1
+    deadline = time.time() + RESTORE_TIMEOUT
+    last, streak, count = None, 0, 0
+    while time.time() < deadline:
+        time.sleep(RESTORE_POLL)
+        count = chrome_window_count()
+        if count is None:
+            continue
+        if count >= goal:
+            return count
+        if count > 0 and count == last:
+            streak += 1
+            if streak >= 3:  # plateaued: restore finished short of goal
+                return count
+        else:
+            streak = 0
+        last = count
+    return count or 0
+
+
+def load_apply_module():
+    """Import aero-layout-apply (extensionless script) as a module."""
+    loader = importlib.machinery.SourceFileLoader("aero_layout_apply", APPLY)
+    spec = importlib.util.spec_from_loader("aero_layout_apply", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def main():
+    if not confirm_restart():
+        return  # cancelled: exit silently
+
+    pre_count = chrome_window_count() or 0
+    was_running = chrome_running()
+
+    notify(f"⏳ Locking layout ({pre_count} Chrome windows)…")
+    snap_path = lock_layout()
+    if snap_path is None:
+        notify("❌ Layout lock failed — aborting, Chrome untouched")
+        sys.exit(1)
+
+    if was_running:
+        notify("⏳ Quitting Chrome…")
+        if not quit_chrome():
+            notify("❌ Chrome didn't quit within 60s — aborting "
+                   "(close blocking dialogs and retry)")
+            sys.exit(1)
+
+    notify("⏳ Relaunching Chrome, waiting for session restore…")
+    subprocess.run(["open", "-a", "Google Chrome"], timeout=30)
+    restored = wait_for_restore(pre_count)
+
+    notify(f"⏳ Reapplying layout ({restored}/{pre_count} windows back)…")
+    with open(snap_path) as f:
+        snap = json.load(f)
+    mod = load_apply_module()
+    # Never let apply_snapshot pop its "Reopen missing Chrome windows?"
+    # dialog: session restore is responsible for bringing windows back.
+    mod.confirm = lambda msg: False
+    stamp = datetime.datetime.now().strftime("%H:%M:%S")
+    mod.apply_snapshot(snap, f"chrome-restart {stamp}")
+
+    final = chrome_window_count() or 0
+    notify(f"✅ Chrome restarted: {final}/{pre_count} windows restored "
+           "and layout reapplied")
+
+
+if __name__ == "__main__":
+    main()
