@@ -2,35 +2,63 @@
 """Arrange the focused workspace's windows into a 2-row grid (aero-grid-2row).
 
 Bound to alt-shift-v. AeroSpace has no native grid layout, so this builds one
-from tree ops: flatten the workspace, set the root container to v_tiles (two
-rows stacked vertically), then group the windows into two nested h_tiles row
-containers. The top row gets ceil(N/2) windows and the bottom row floor(N/2).
+from tree ops: flatten the workspace, set the root container to v_tiles (all
+windows stacked as full-width rows), then group the windows into two nested
+h_tiles row containers. The top row gets ceil(N/2) windows and the bottom row
+floor(N/2).
 
-Command sequence (found experimentally on 0.20.0-Beta, with the default
-normalizations enabled — nested containers auto-take the opposite orientation,
-so a container joined inside the v_tiles root becomes h_tiles):
-  1. flatten-workspace-tree            -> root is a flat list of N windows
-  2. layout v_tiles                    -> root container becomes vertical
-  3. join-with down --window-id <first bottom-row window>
-                                       -> wraps it + the window below into an
-                                          h_tiles container (the bottom row)
-  4. move up --window-id <w>           -> each remaining bottom-row window
-                                          enters the container directly above
-  5. same join/move for the top row
+Two facts discovered by live-debugging on 0.20.0-Beta that the sequence
+depends on:
+
+* `list-windows --workspace N` output is sorted by app/title, NOT tree (DFS)
+  order. join-with/move act on tree neighbors, so driving them with the
+  list-windows order targets non-adjacent windows and shreds the layout
+  (this was the original bug: rows never merged). There is no CLI that dumps
+  tree order without moving focus, but after `layout v_tiles` the tree order
+  IS the top-to-bottom visual order, so we read each window's real y via
+  CGWindowList (AeroSpace window-ids are CGWindowIDs) and sort by it.
+* Floating windows show up in list-windows but are not part of the tile tree;
+  they must be excluded or the row split counts them.
+
+Verified command sequence (root v_tiles, windows in tree order top..bottom):
+  1. flatten-workspace-tree             -> root is a flat list of N windows
+  2. layout v_tiles                     -> N stacked full-width rows
+  3. read y of each window, sort        -> true tree order
+  4. bottom row: join-with down --window-id bottom[0]  (wraps bottom[0] +
+     bottom[1] into a nested h_tiles container; nested containers take the
+     opposite orientation), then `move up --window-id w` for each remaining
+     bottom window (each is directly below the container and enters it)
+  5. top row: same join/move (bottom first, so top-row ops never see bottom
+     windows as neighbors)
   6. balance-sizes
 
-Every op drives an explicit window-id (order re-read after the flatten), so
-the result is deterministic regardless of which window is focused. Edge cases:
-0/1 windows are a no-op; 2 windows become one full-width row each (v_tiles);
-odd counts put the extra window in the top row.
-
-Only touches the currently focused workspace.
+Edge cases: 0/1 tiled windows are a no-op; 2 windows become one full-width
+row each (v_tiles); odd counts put the extra window in the top row. Floating
+windows are left alone. Only touches the currently focused workspace.
 """
 
 import math
 import subprocess
 import sys
 import time
+
+# Dumps "windowNumber x y w h" for every on-screen window, keyed by
+# CGWindowID (== AeroSpace window-id). castRefToObject is required: plain
+# deepUnwrap of the CFArray returned by CGWindowListCopyWindowInfo is empty.
+CGWINDOW_JXA = """
+function run() {
+    ObjC.import('CoreGraphics');
+    const ref = $.CGWindowListCopyWindowInfo(0, 0);
+    const arr = ObjC.castRefToObject(ref);
+    const out = [];
+    for (let i = 0; i < arr.count; i++) {
+        const d = ObjC.deepUnwrap(arr.objectAtIndex(i));
+        const b = d.kCGWindowBounds || {};
+        out.push([d.kCGWindowNumber, b.X, b.Y, b.Width, b.Height].join(' '));
+    }
+    return out.join('\\n');
+}
+"""
 
 
 def run(args):
@@ -49,10 +77,53 @@ def aero(args):
     time.sleep(0.1)
 
 
-def workspace_windows(ws):
-    """Window ids of a workspace, in tree (DFS) order."""
-    out = run(["list-windows", "--workspace", ws, "--format", "%{window-id}"])
-    return [int(line.strip()) for line in out.splitlines() if line.strip()]
+def tiled_windows(ws):
+    """Window ids of a workspace's tiled (non-floating) windows.
+
+    NOTE: the returned order is list-windows order (app/title-sorted), which
+    is NOT tree order — callers must not treat it as adjacency.
+    """
+    out = run(["list-windows", "--workspace", ws,
+               "--format", "%{window-id}|%{window-layout}"])
+    wids = []
+    for line in out.splitlines():
+        parts = line.split("|", 1)
+        if len(parts) == 2 and parts[1].strip() != "floating":
+            wids.append(int(parts[0].strip()))
+    return wids
+
+
+def window_ys():
+    """Real on-screen y of every window, keyed by window-id (CGWindowList)."""
+    out = subprocess.run(
+        ["osascript", "-l", "JavaScript", "-e", CGWINDOW_JXA],
+        capture_output=True, text=True, timeout=15,
+    ).stdout
+    ys = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 5:
+            try:
+                ys[int(parts[0])] = float(parts[2])
+            except ValueError:
+                pass
+    return ys
+
+
+def tree_order(wids):
+    """Sort window ids top-to-bottom by real y.
+
+    Only valid while the root is v_tiles with no nesting (each window is a
+    full-width row at a distinct y). Retries while geometry settles after the
+    layout op; falls back to the given order if it never becomes unambiguous.
+    """
+    for _ in range(8):
+        ys = window_ys()
+        got = {w: ys[w] for w in wids if w in ys}
+        if len(got) == len(wids) and len(set(got.values())) == len(wids):
+            return sorted(wids, key=lambda w: got[w])
+        time.sleep(0.15)
+    return list(wids)
 
 
 def main():
@@ -62,18 +133,22 @@ def main():
         return 1
     orig_focus = run(["list-windows", "--focused", "--format", "%{window-id}"])
 
-    n = len(workspace_windows(ws))
+    n = len(tiled_windows(ws))
     if n < 2:
-        print(f"Workspace {ws}: {n} window(s), nothing to arrange")
+        print(f"Workspace {ws}: {n} tiled window(s), nothing to arrange")
         return 0
 
     aero(["flatten-workspace-tree", "--workspace", ws])
-    wids = workspace_windows(ws)  # deterministic order for this run
+    wids = tiled_windows(ws)
     n = len(wids)
 
-    # Root vertical = the two rows stack top-to-bottom. For n == 2 this alone
-    # is the grid: one full-width window per row.
+    # Root vertical = N stacked full-width rows. For n == 2 this alone is the
+    # grid: one full-width window per row.
     aero(["layout", "v_tiles", "--window-id", str(wids[0])])
+
+    # True top-to-bottom tree order (list-windows order is app/title-sorted
+    # and would make the join/move ops below target non-adjacent windows).
+    wids = tree_order(wids)
 
     top = wids[: math.ceil(n / 2)]
     bottom = wids[math.ceil(n / 2):]
