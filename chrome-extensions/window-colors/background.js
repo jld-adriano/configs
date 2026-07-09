@@ -97,7 +97,12 @@ async function getStreamSummary() {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "stream-summary") {
     getStreamSummary().then((sessions) => {
-      sendResponse((msg.sessionId && sessions[msg.sessionId]) || null);
+      // ok distinguishes "sink answered, session unknown" (fallback sources
+      // may be trusted) from "sink unreachable" (content fails closed).
+      sendResponse({
+        ok: streamSummaryCache.fetchedAt > 0,
+        summary: (msg.sessionId && sessions[msg.sessionId]) || null,
+      });
     });
     return true; // async response
   }

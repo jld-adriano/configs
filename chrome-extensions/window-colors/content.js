@@ -234,9 +234,9 @@
   }
 
   // ── Devin session banner (full top row) ──────────────────────────────────
-  // Shows the session title big, plus a running list of the PRs found on the
-  // page. PRs come from real GitHub anchors when present, otherwise from
-  // Devin's "pr:NNNN" tab chips (linked back to the session's PR tab).
+  // Shows the session title big, this session's OPEN PRs (sourced from the
+  // devin-stream sink summary -- the captured Devin API is the only reliable
+  // PR-state source), and the tail of the chat transcript.
 
   function getSessionTitle() {
     // The tab title is the session title (Devin sets it); strip any suffix.
@@ -255,6 +255,10 @@
   // worker fetches and caches it; we ask for our session's slice on the
   // heartbeat cadence.
   let streamSummary = null;
+  // True once the background confirmed the sink is reachable (even if it has
+  // no entry for this session). Until then PR rendering fails closed: the
+  // localStorage fallback alone cannot distinguish open from merged.
+  let streamSummaryAnswered = false;
 
   function refreshStreamSummary() {
     if (!isDevinSession()) return;
@@ -262,9 +266,10 @@
       chrome.runtime.sendMessage(
         { type: "stream-summary", sessionId: getStableKey() },
         (resp) => {
-          if (chrome.runtime.lastError) return; // extension reloading
-          if (resp !== undefined) {
-            streamSummary = resp || null;
+          if (chrome.runtime.lastError || !resp) return; // extension reloading
+          if (resp.ok) {
+            streamSummary = resp.summary || null;
+            streamSummaryAnswered = true;
             tick();
           }
         }
@@ -325,9 +330,10 @@
     // devin-stream summary (live Devin API captures: v2sessions /
     // /sessions/<id>/prs carry authoritative state open|merged|closed).
     // localStorage records only fill in titles, or act as the fallback
-    // source when the stream has no PR data for this session -- in which
-    // case any per-PR state the stream DOES know still overrides the
-    // stale local record.
+    // source when the sink knows nothing about this session. Until the sink
+    // has answered at least once, render NO PRs (fail closed): the local
+    // records alone cannot distinguish open from merged, and briefly showing
+    // nothing beats confidently showing merged PRs as open.
     const prs = new Map();
     const local = localTabPRs();
 
@@ -344,6 +350,8 @@
       return prs;
     }
 
+    if (!streamSummaryAnswered) return prs;
+
     for (const [href, d] of local) {
       if (prs.size >= MAX_PRS) break;
       if (!isOpenPr(d)) continue;
@@ -357,13 +365,33 @@
 
   let lastBannerState = "";
 
+  // The banner's chat rows: the last 4 back-and-forth messages (oldest ->
+  // newest, as the conversation happened) from the sink's recentMessages,
+  // falling back to the older two-field summary shape when absent.
+  function bannerMessages() {
+    if (!streamSummary) return [];
+    if (Array.isArray(streamSummary.recentMessages) &&
+        streamSummary.recentMessages.length) {
+      return streamSummary.recentMessages
+        .filter((m) => m && m.text)
+        .slice(-4)
+        .map((m) => [m.role === "human" ? "👤" : "🤖", m.text]);
+    }
+    const out = [];
+    if (streamSummary.lastHumanMessage)
+      out.push(["👤", streamSummary.lastHumanMessage]);
+    if (streamSummary.lastAgentMessage)
+      out.push(["🤖", streamSummary.lastAgentMessage]);
+    return out;
+  }
+
   function updateBanner() {
     const title = getSessionTitle();
     const prs = collectPRs();
-    const lastHuman = (streamSummary && streamSummary.lastHumanMessage) || "";
-    const lastAgent = (streamSummary && streamSummary.lastAgentMessage) || "";
+    const messages = bannerMessages();
     const state =
-      title + "|" + [...prs.keys()].join(",") + "|" + lastHuman + "|" + lastAgent;
+      title + "|" + [...prs.keys()].join(",") + "|" +
+      messages.map((m) => m[0] + m[1]).join("|");
     let banner = document.getElementById("wc-banner");
     if (banner && state === lastBannerState) return;
     lastBannerState = state;
@@ -398,15 +426,14 @@
       banner.appendChild(prRow);
     }
 
-    // Last chat messages (from the devin-stream captured-API summary): the
-    // most recent human message and the most recent agent CHAT message
+    // Recent chat messages (from the devin-stream captured-API summary):
+    // the last 4 human/agent CHAT messages in conversation order
     // (reasoning/tool events are excluded sink-side). Rendered below the PR
     // list, set off by a separator line.
-    if (lastHuman || lastAgent) {
+    if (messages.length) {
       const msgs = document.createElement("div");
       msgs.id = "wc-banner-msgs";
-      for (const [icon, text] of [["👤", lastHuman], ["🤖", lastAgent]]) {
-        if (!text) continue;
+      for (const [icon, text] of messages) {
         const row = document.createElement("div");
         row.className = "wc-banner-msg";
         row.textContent = icon + " " + text;

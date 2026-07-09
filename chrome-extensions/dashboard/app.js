@@ -353,13 +353,23 @@ function renderCard(s) {
   }
 
   let msgsHtml = "";
-  if (s.summary && (s.summary.lastHumanMessage || s.summary.lastAgentMessage)) {
-    const rows = [];
-    if (s.summary.lastHumanMessage)
-      rows.push(`<div class="last-msg">👤 ${esc(s.summary.lastHumanMessage)}</div>`);
-    if (s.summary.lastAgentMessage)
-      rows.push(`<div class="last-msg">🤖 ${esc(s.summary.lastAgentMessage)}</div>`);
-    msgsHtml = `<div class="last-msgs">${rows.join("")}</div>`;
+  if (s.summary) {
+    // Last 4 back-and-forth chat messages (oldest -> newest), falling back to
+    // the older two-field shape for pre-recentMessages summaries.
+    let rows;
+    if (Array.isArray(s.summary.recentMessages) && s.summary.recentMessages.length) {
+      rows = s.summary.recentMessages
+        .filter((m) => m && m.text)
+        .slice(-4)
+        .map((m) => `<div class="last-msg">${m.role === "human" ? "👤" : "🤖"} ${esc(m.text)}</div>`);
+    } else {
+      rows = [];
+      if (s.summary.lastHumanMessage)
+        rows.push(`<div class="last-msg">👤 ${esc(s.summary.lastHumanMessage)}</div>`);
+      if (s.summary.lastAgentMessage)
+        rows.push(`<div class="last-msg">🤖 ${esc(s.summary.lastAgentMessage)}</div>`);
+    }
+    if (rows.length) msgsHtml = `<div class="last-msgs">${rows.join("")}</div>`;
   }
 
   let streamHtml = "";

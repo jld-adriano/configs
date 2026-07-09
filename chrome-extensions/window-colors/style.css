@@ -53,13 +53,13 @@
   line-height: 1;
 }
 
-/* Last human/agent chat messages (from the devin-stream summary), shown
-   below the PR list behind a separator line */
+/* Recent chat messages (from the devin-stream summary; last 4 back-and-forth
+   human/agent messages), shown below the PR list behind a separator line */
 #wc-banner-msgs {
-  /* 10px separator with 30px of space above and below it */
-  margin-top: 30px;
-  padding-top: 30px;
-  border-top: 10px solid rgba(255, 255, 255, 0.35);
+  /* 5px separator with 10px of space above and below it */
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 5px solid rgba(255, 255, 255, 0.35);
 }
 
 .wc-banner-msg {
@@ -68,12 +68,15 @@
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   line-height: 1.3;
+  margin-bottom: 4px;
   /* ellipsize to ~10 lines each */
   display: -webkit-box;
   -webkit-line-clamp: 10;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.wc-banner-msg:last-child { margin-bottom: 0; }
 
 #wc-banner-prs {
   display: flex;
