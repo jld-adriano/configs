@@ -25,7 +25,9 @@ the captured Devin API payloads as they arrive (and backfilled from
 events.jsonl on first start):
 
     summary[sessionId] = {title, status, prs: [{number,title,url,state,merged,
-                          draft}], lastHumanMessage, lastAgentMessage, lastSeen}
+                          draft}], lastHumanMessage, lastAgentMessage,
+                          recentMessages: [{role: "human"|"agent", text, ts}]
+                          (last 4 chat messages, oldest -> newest), lastSeen}
 
 Payload sources (documented from captured traffic):
   * GET .../v2sessions            -> result[]: devin_id, title, status,
@@ -115,6 +117,10 @@ def _write_latest():
 # ── Per-session summary (folded from captured Devin API payloads) ───────────
 
 MSG_TRUNC = 300
+# recentMessages: the last few chat messages (transcript tail) kept per
+# session, oldest -> newest, with a larger per-message truncation.
+RECENT_MSGS = 4
+RECENT_TRUNC = 600
 # "initial_user_message" is deliberately NOT a lastHumanMessage source: it is
 # by definition the session's FIRST message, so it only serves as a fallback
 # when no real user_message was ever captured (see _note_message).
@@ -144,18 +150,21 @@ def _epoch(ts):
         return 0.0
 
 
-def _trunc_msg(text):
+def _trunc_msg(text, limit=MSG_TRUNC):
     text = " ".join(str(text).split())
-    return text[:MSG_TRUNC] + ("…" if len(text) > MSG_TRUNC else "")
+    return text[:limit] + ("…" if len(text) > limit else "")
 
 
 def _summary_for(sid):
-    return STATE["summary"].setdefault(sid, {
+    summ = STATE["summary"].setdefault(sid, {
         "title": None, "status": None, "prs": [],
         "lastHumanMessage": None, "lastHumanMessageAt": None,
         "lastAgentMessage": None, "lastAgentMessageAt": None,
+        "recentMessages": [],
         "lastSeen": None,
     })
+    summ.setdefault("recentMessages", [])  # entries persisted pre-field
+    return summ
 
 
 def _sid_from_devin_id(devin_id):
@@ -194,15 +203,36 @@ def _note_message(summ, contents):
             summ["lastHumanMessageAt"] = contents.get("timestamp")
         return
     if mtype in HUMAN_MSG_TYPES:
-        key = "lastHumanMessage"
+        key, role = "lastHumanMessage", "human"
     elif mtype in AGENT_MSG_TYPES:
-        key = "lastAgentMessage"
+        key, role = "lastAgentMessage", "agent"
     else:
         return
     ts = contents.get("timestamp")
+    _note_recent(summ, role, text, ts)
     if _epoch(ts) >= _epoch(summ.get(key + "At")):
         summ[key] = _trunc_msg(text)
         summ[key + "At"] = ts
+
+
+def _note_recent(summ, role, text, ts):
+    """Keep the last RECENT_MSGS chat messages, oldest -> newest.
+
+    Deduped by (role, ts): the same message arrives repeatedly (v2sessions
+    re-polls, WS streaming finals, backfill), and a re-arrival may carry a
+    longer final text, so it replaces the stored one. Untimestamped messages
+    are skipped -- they can't be ordered into a transcript.
+    """
+    if not ts:
+        return
+    recent = summ["recentMessages"]
+    for m in recent:
+        if m["ts"] == ts and m["role"] == role:
+            m["text"] = _trunc_msg(text, RECENT_TRUNC)
+            return
+    recent.append({"role": role, "text": _trunc_msg(text, RECENT_TRUNC), "ts": ts})
+    recent.sort(key=lambda m: _epoch(m["ts"]))
+    del recent[:-RECENT_MSGS]
 
 
 def _note_pr(summ, url, state=None, draft=None, merged=None):
