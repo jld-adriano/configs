@@ -76,6 +76,38 @@
   opacity: 1;
 }
 
+/* Per-tab hide toggle: sits next to the ⓘ icon, same small styling family */
+#wc-banner-hide {
+  flex: 0 0 auto;
+  font-size: 12px;
+  opacity: 0.55;
+  cursor: pointer;
+  pointer-events: auto;
+  align-self: flex-start;
+  line-height: 1;
+}
+
+#wc-banner-hide:hover {
+  opacity: 1;
+}
+
+/* Collapsed banner (per-tab): shrink to a minimal strip showing only the
+   symbol + the two title-row icons. The title text, PR list and message rows
+   are hidden; the awaiting line still attaches to the banner's bottom edge. */
+#wc-banner.wc-collapsed {
+  padding: 2px 6px 3px;
+}
+
+#wc-banner.wc-collapsed #wc-banner-title-text,
+#wc-banner.wc-collapsed #wc-banner-prs,
+#wc-banner.wc-collapsed #wc-banner-msgs {
+  display: none;
+}
+
+#wc-banner.wc-collapsed #wc-banner-title {
+  gap: 6px;
+}
+
 #wc-debug-panel {
   position: fixed;
   top: 40px;

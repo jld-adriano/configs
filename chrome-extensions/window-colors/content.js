@@ -109,6 +109,12 @@
   let assignedColor = null;
   let assignedSymbol = null;
 
+  // Per-tab banner collapse (distinct from the global HUD dot, which hides
+  // everything in EVERY tab). Session-scoped: a plain variable that survives
+  // the 15s re-renders because updateBanner reads it rather than resetting it.
+  // Collapsed = a minimal strip (symbol + the two small title-row icons).
+  let bannerHidden = false;
+
   // ── Global HUD visibility toggle ──────────────────────────────────────────
   // A tiny always-visible dot (bottom-right) hides/shows the badge, banner and
   // awaiting line in EVERY tab. Persisted in chrome.storage.local so one click
@@ -281,6 +287,7 @@
         sinkStatusEnumAt: streamSummary
           ? streamSummary.statusEnumAt || null
           : null,
+        sinkLastSeen: streamSummary ? streamSummary.lastSeen || null : null,
         hudHidden,
         loaded: isDevinSession() ? devinLoaded : capyLoaded,
         sessionTitle: isDevinSession()
@@ -538,6 +545,7 @@
     const prs = collectPRs();
     const messages = bannerMessages();
     const state =
+      (bannerHidden ? "H|" : "S|") +
       symbol + "|" + title + "|" + [...prs.keys()].join(",") + "|" +
       messages.map((m) => m[0] + m[1]).join("|");
     let banner = document.getElementById("wc-banner");
@@ -547,6 +555,9 @@
 
     banner = document.createElement("div");
     banner.id = "wc-banner";
+    // Collapsed state hides the title text / PR / message rows via CSS,
+    // leaving just the symbol + the two title-row icons as a small strip.
+    banner.classList.toggle("wc-collapsed", bannerHidden);
     banner.style.backgroundColor = currentColor();
     applyBannerContrast(banner, currentColor());
 
@@ -577,6 +588,22 @@
       toggleDebugPanel();
     });
     titleRow.appendChild(dbg);
+
+    // Per-tab hide toggle: collapse this banner to a minimal strip (and back).
+    // Same styling family as the ⓘ icon. Distinct from the global HUD dot.
+    const hide = document.createElement("span");
+    hide.id = "wc-banner-hide";
+    hide.textContent = bannerHidden ? "▸" : "▾";
+    hide.title = bannerHidden
+      ? "Expand banner (this tab)"
+      : "Hide banner (this tab)";
+    hide.addEventListener("click", (e) => {
+      e.stopPropagation();
+      bannerHidden = !bannerHidden;
+      updateBanner();
+      updateAwaitBorder(); // re-anchor the awaiting line to the rebuilt banner
+    });
+    titleRow.appendChild(hide);
 
     if (prs.size) {
       const prRow = document.createElement("div");
@@ -641,14 +668,38 @@
     /capy is idle/i,
   ];
 
-  // Sink status freshness threshold: the sink's awaiting flag is
-  // authoritative only while its statusEnumAt is at most this old.
+  // Sink freshness thresholds. Two independent signals make the sink's
+  // awaiting flag authoritative:
+  //   1. statusEnumAt (when the status last CHANGED) is recent -- the session
+  //      is actively transitioning, so the flag is obviously current.
+  //   2. lastSeen (when the sink last OBSERVED this session) is recent -- the
+  //      devin-stream active poll (background.js) refetches the org-wide
+  //      v2sessions list every ~2.5 min, re-folding status/awaiting for EVERY
+  //      session, so a fresh observation means the flag reflects current
+  //      server state even for sessions sitting in a stable state (suspended/
+  //      finished) whose statusEnumAt is hours old. Without (2), those stable
+  //      sessions -- the bulk of open background tabs -- always failed the
+  //      freshness gate and fell to the text backstop even though the sink
+  //      knew their state; (2) is what lets the active poll actually move tabs
+  //      onto awaitSource "sink".
   const AWAIT_SINK_FRESH_MS = 4 * 60 * 1000;
+  const AWAIT_SINK_OBSERVED_MS = 6 * 60 * 1000; // > poll period, with margin
+
+  // Parse the sink's timestamps (ISO with a numeric offset like -0700; some
+  // engines want the offset colon, so insert it before Date.parse).
+  function parseSinkTs(ts) {
+    if (!ts) return NaN;
+    return Date.parse(String(ts).replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  }
 
   function sinkAwaitingFresh() {
-    if (!streamSummary || !streamSummary.statusEnumAt) return false;
-    const t = Date.parse(streamSummary.statusEnumAt);
-    return Number.isFinite(t) && Date.now() - t <= AWAIT_SINK_FRESH_MS;
+    if (!streamSummary) return false;
+    const changed = parseSinkTs(streamSummary.statusEnumAt);
+    if (Number.isFinite(changed) && Date.now() - changed <= AWAIT_SINK_FRESH_MS) {
+      return true;
+    }
+    const seen = parseSinkTs(streamSummary.lastSeen);
+    return Number.isFinite(seen) && Date.now() - seen <= AWAIT_SINK_OBSERVED_MS;
   }
 
   let lastTextAwaiting = false;
