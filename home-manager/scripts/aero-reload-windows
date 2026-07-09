@@ -45,6 +45,20 @@ def notify(msg):
         pass
 
 
+def done_dialog(msg, title="Chrome Reload"):
+    """Show a completion modal (auto-dismisses after 20s so it never blocks)."""
+    safe = msg.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        'tell application "System Events" to display dialog '
+        f'"{safe}" with title "{title}" buttons {{"OK"}} '
+        'default button "OK" giving up after 20'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], timeout=30)
+    except Exception:
+        pass
+
+
 def main():
     start = time.time()
     count = osascript(
@@ -81,6 +95,7 @@ def main():
         summary += f" ({timed_out} timed out — Chrome busy)"
     notify(summary)
     print(summary)
+    done_dialog(f"✅ {summary}")
 
 
 if __name__ == "__main__":

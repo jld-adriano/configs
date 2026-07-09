@@ -41,6 +41,20 @@ def notify(msg):
         pass
 
 
+def done_dialog(msg, title="AeroSpace Layout"):
+    """Show a completion modal (auto-dismisses after 20s so it never blocks)."""
+    safe = msg.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        'tell application "System Events" to display dialog '
+        f'"{safe}" with title "{title}" buttons {{"OK"}} '
+        'default button "OK" giving up after 20'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], timeout=30)
+    except Exception:
+        pass
+
+
 # ── State selection ─────────────────────────────────────────────────────────
 
 STAMP_RE = re.compile(r"^(?:(?P<label>.+)-)?"
@@ -553,7 +567,9 @@ def main():
 
     with open(path) as f:
         snap = json.load(f)
-    apply_snapshot(snap, pretty_ts(os.path.basename(path)))
+    label = pretty_ts(os.path.basename(path))
+    apply_snapshot(snap, label)
+    done_dialog(f"✅ Applied layout: {label}")
 
 
 if __name__ == "__main__":
