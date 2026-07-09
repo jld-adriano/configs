@@ -1,7 +1,21 @@
-// Service worker: central color registry and dev auto-reload.
+// Service worker: central color registry, automatic memory reclaim of bloated
+// idle Devin/Capy tabs, and dev auto-reload.
 
 const HEARTBEAT_TIMEOUT_MS = 10 * 60 * 1000; // free a color slot after this
 const GOLDEN_ANGLE = 137.508; // degrees; spreads hues maximally
+
+// ── Auto-reclaim tuning ──────────────────────────────────────────────────────
+// Devin session pages accumulate JS heap forever (long-lived SPA + streaming);
+// session state is server-backed, so reloading an idle tab loses nothing and
+// returns its renderer memory. Every cycle we reload AT MOST a few tabs that
+// are (a) awaiting/asleep per their own report, (b) not the tab the user is
+// looking at, and (c) over the heap threshold -- spaced out so the reload
+// burst never competes with foreground work.
+const RECLAIM_PERIOD_MIN = 25;                     // cycle cadence (minutes)
+const RECLAIM_HEAP_BYTES = 400 * 1024 * 1024;      // jsHeapUsed threshold
+const RECLAIM_MAX_PER_CYCLE = 3;                   // tabs reloaded per cycle
+const RECLAIM_SPACING_MS = 10 * 1000;              // gap between reloads
+const RECLAIM_COOLDOWN_MS = 2 * 60 * 60 * 1000;    // per-tab re-reload floor
 
 // ── Color registry ──────────────────────────────────────────────────────────
 // Keys (e.g. Devin session ids) are assigned the smallest free slot; the slot
@@ -177,6 +191,64 @@ async function pushStateToSink() {
 
 chrome.alarms.create("report-state", { periodInMinutes: 0.5 });
 
+// ── Automatic memory reclaim ────────────────────────────────────────────────
+// See the RECLAIM_* constants up top for the policy. Reload timestamps are
+// keyed by session key (not tab id -- those get recycled) and persisted so a
+// worker restart can't cause churn. Every reload is logged to the sink
+// (event "auto-reload" in state.jsonl) so the behavior is auditable.
+
+async function autoReclaim() {
+  const now = Date.now();
+  const store = await chrome.storage.local.get("autoReloadAt");
+  const autoReloadAt = store.autoReloadAt || {};
+
+  const candidates = Object.values(tabReports)
+    .filter((r) =>
+      (r.kind === "devin" || r.kind === "capy") &&
+      r.awaiting === true &&
+      r.loaded === true &&
+      r.tabId != null && r.key &&
+      (r.jsHeapUsed || 0) > RECLAIM_HEAP_BYTES &&
+      !(autoReloadAt[r.key] && now - autoReloadAt[r.key] < RECLAIM_COOLDOWN_MS))
+    .sort((a, b) => (b.jsHeapUsed || 0) - (a.jsHeapUsed || 0))
+    .slice(0, RECLAIM_MAX_PER_CYCLE);
+  if (!candidates.length) return;
+
+  for (let i = 0; i < candidates.length; i++) {
+    if (i > 0) {
+      await new Promise((res) => setTimeout(res, RECLAIM_SPACING_MS));
+    }
+    const r = candidates[i];
+    try {
+      // Re-check focus at reload time (not cycle start): the user may have
+      // switched onto this tab during the stagger. Never touch the focused
+      // window's active tab.
+      const [focused] = await chrome.tabs.query({
+        active: true, lastFocusedWindow: true,
+      });
+      if (focused && focused.id === r.tabId) continue;
+      await chrome.tabs.reload(r.tabId);
+      autoReloadAt[r.key] = Date.now();
+      sinkEvent({
+        event: "auto-reload",
+        tabId: r.tabId,
+        key: r.key,
+        jsHeapUsed: r.jsHeapUsed,
+        sessionTitle: r.sessionTitle || null,
+      });
+    } catch (e) {
+      // tab already closed/discarded; nothing to reclaim
+    }
+  }
+
+  for (const [key, ts] of Object.entries(autoReloadAt)) {
+    if (now - ts > 7 * 24 * 60 * 60 * 1000) delete autoReloadAt[key];
+  }
+  await chrome.storage.local.set({ autoReloadAt });
+}
+
+chrome.alarms.create("auto-reclaim", { periodInMinutes: RECLAIM_PERIOD_MIN });
+
 // ── Dev auto-reload ─────────────────────────────────────────────────────────
 // Unpacked extensions serve files straight from disk, so fetching our own
 // files reflects current disk contents. Poll a fingerprint and reload the
@@ -211,6 +283,10 @@ chrome.alarms.create("watch-files", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "report-state") {
     pushStateToSink();
+    return;
+  }
+  if (alarm.name === "auto-reclaim") {
+    autoReclaim();
     return;
   }
   if (alarm.name !== "watch-files") return;
