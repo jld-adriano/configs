@@ -37,6 +37,24 @@
       window.location.href);
   }
 
+  // Capy sets the tab title to "<thread title> | Capy" (observed live via the
+  // sink's tab reports); strip the suffix, tolerating a "-"/"·" separator too.
+  function getCapyThreadTitle() {
+    return (document.title || "")
+      .replace(/\s*[-|·]\s*Capy\s*$/i, "")
+      .trim();
+  }
+
+  // Same gating idea as devinSessionLoaded(): a Capy thread counts as
+  // "loaded" only once the tab title carries a real thread title. Pre-load
+  // the title is empty or just "Capy", and we must not report that as a
+  // session title (or badge the tab yet).
+  function capyThreadLoaded() {
+    if (!isCapyThread()) return false;
+    const t = getCapyThreadTitle();
+    return t !== "" && t.toLowerCase() !== "capy";
+  }
+
   function getStableKey() {
     const url = window.location.href;
     // For Devin sessions, use the session ID for stable color
@@ -124,6 +142,58 @@
     return assignedColor || hashToHSL(getStableKey());
   }
 
+  // ── Banner text contrast ──────────────────────────────────────────────────
+  // Banner backgrounds are HSL strings we generate ourselves (registry slots
+  // and hashToHSL fallbacks), with varying lightness -- bright slots make the
+  // hardcoded white text unreadable. Parse the HSL, convert to sRGB, compute
+  // WCAG relative luminance, and pick near-black or white text accordingly.
+  function contrastStyleFor(bg) {
+    let lum = 0; // unparseable -> treat as dark -> white text (old behavior)
+    const m = /hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)/i
+      .exec(bg || "");
+    if (m) {
+      const h = parseFloat(m[1]) / 360;
+      const s = parseFloat(m[2]) / 100;
+      const l = parseFloat(m[3]) / 100;
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      const chan = (t) => {
+        t = ((t % 1) + 1) % 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+      };
+      const lin = (c) =>
+        c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      lum =
+        0.2126 * lin(chan(h + 1 / 3)) +
+        0.7152 * lin(chan(h)) +
+        0.0722 * lin(chan(h - 1 / 3));
+    }
+    return lum > 0.5
+      ? {
+          color: "#111",
+          shadow: "0 1px 2px rgba(255, 255, 255, 0.4)",
+          separator: "rgba(0, 0, 0, 0.35)",
+        }
+      : {
+          color: "#fff",
+          shadow: "0 1px 2px rgba(0, 0, 0, 0.5)",
+          separator: "rgba(255, 255, 255, 0.35)",
+        };
+  }
+
+  // Applied everywhere the banner background is set (creation + registry
+  // color updates). Children pick the color up via `color: inherit` and the
+  // --wc-* custom properties in style.css.
+  function applyBannerContrast(banner, bg) {
+    const c = contrastStyleFor(bg);
+    banner.style.color = c.color;
+    banner.style.setProperty("--wc-text-shadow", c.shadow);
+    banner.style.setProperty("--wc-separator", c.separator);
+  }
+
   function currentSymbol() {
     return (
       assignedSymbol ||
@@ -179,17 +249,20 @@
     // down the heartbeat -- the registry slot matters more than the payload.
     let report;
     try {
-      // Pre-load Devin tabs still heartbeat (to hold the color slot) but must
-      // not report the bare app name as a session title.
+      // Pre-load Devin/Capy tabs still heartbeat (to hold the color slot) but
+      // must not report the bare app name as a session title.
       const devinLoaded = devinSessionLoaded();
+      const capyLoaded = capyThreadLoaded();
       report = {
         url: location.href,
         title: document.title,
         kind: isDevinSession() ? "devin" : "capy",
         awaiting: isAwaiting(),
         hudHidden,
-        loaded: isDevinSession() ? devinLoaded : true,
-        sessionTitle: isDevinSession() && devinLoaded ? getSessionTitle() : null,
+        loaded: isDevinSession() ? devinLoaded : capyLoaded,
+        sessionTitle: isDevinSession()
+          ? (devinLoaded ? getSessionTitle() : null)
+          : (capyLoaded ? getCapyThreadTitle() : null),
         prs: isDevinSession() ? [...collectPRs().entries()] : [],
         color: currentColor(),
         symbol: currentSymbol(),
@@ -210,7 +283,10 @@
             badge.textContent = currentSymbol();
           }
           const banner = document.getElementById("wc-banner");
-          if (banner) banner.style.backgroundColor = assignedColor;
+          if (banner) {
+            banner.style.backgroundColor = assignedColor;
+            applyBannerContrast(banner, assignedColor);
+          }
         }
       });
     } catch (e) {
@@ -400,6 +476,7 @@
     banner = document.createElement("div");
     banner.id = "wc-banner";
     banner.style.backgroundColor = currentColor();
+    applyBannerContrast(banner, currentColor());
 
     const titleRow = document.createElement("div");
     titleRow.id = "wc-banner-title";
@@ -552,6 +629,16 @@
     } else if (isCapyThread()) {
       const banner = document.getElementById("wc-banner");
       if (banner) banner.remove();
+      if (!capyThreadLoaded()) {
+        // Still loading (title is empty or just "Capy"): render nothing
+        // until the thread hydrates, mirroring the Devin pre-load gate.
+        for (const id of ["wc-badge", "wc-await-border"]) {
+          const el = document.getElementById(id);
+          if (el) el.remove();
+        }
+        syncBannerOffset();
+        return;
+      }
       if (!document.getElementById("wc-badge")) createBadge();
     } else {
       for (const id of ["wc-badge", "wc-banner"]) {
