@@ -277,6 +277,11 @@ function buildSessions() {
     }
     s.summary = summ;
     if (summ.title) s.title = summ.title;
+    // LLM enrichment (sink-side): decidedTitle/symbol are preferred for
+    // display; rawTitle is kept for the tooltip. The slot color is untouched.
+    if (summ.decidedTitle) s.decidedTitle = summ.decidedTitle;
+    if (summ.rawTitle || summ.title) s.rawTitle = summ.rawTitle || summ.title;
+    if (summ.symbol) s.symbol = summ.symbol;
   }
 
   return [...byKey.values()];
@@ -390,8 +395,9 @@ function renderCard(s) {
     ` style="--card-color:${esc(s.color || "transparent")}">` +
     `<div class="card-head">` +
     `<span class="symbol">${esc(s.symbol || "")}</span>` +
-    `<span class="card-title"><a href="${esc(s.url)}" target="_blank" rel="noopener">` +
-    `${esc(s.title || "(untitled session)")}</a></span>` +
+    `<span class="card-title"><a href="${esc(s.url)}" target="_blank" rel="noopener"` +
+    (s.decidedTitle && s.rawTitle ? ` title="${esc(s.rawTitle)}"` : "") + `>` +
+    `${esc(s.decidedTitle || s.title || "(untitled session)")}</a></span>` +
     badge +
     `</div>` +
     `<div class="card-meta">${meta.join("")}</div>` +
@@ -413,7 +419,7 @@ function renderGroups(sessions) {
   if (q) {
     list = list.filter(
       (s) =>
-        (s.title || "").toLowerCase().includes(q) ||
+        ((s.title || "") + " " + (s.decidedTitle || "")).toLowerCase().includes(q) ||
         sessionPRs(s).some((pr) => ((pr.title || "") + " " + pr.url).toLowerCase().includes(q))
     );
   }
@@ -517,8 +523,9 @@ function renderPrsView(sessions) {
           `<section class="pr-group" style="--card-color:${esc(s.color || "transparent")}">` +
           `<h2 class="pr-group-title">` +
           `<span class="symbol">${esc(s.symbol || "")}</span>` +
-          `<a href="${esc(s.url)}" target="_blank" rel="noopener">` +
-          `${esc(s.title || s.key)}</a>` +
+          `<a href="${esc(s.url)}" target="_blank" rel="noopener"` +
+          (s.decidedTitle && s.rawTitle ? ` title="${esc(s.rawTitle)}"` : "") + `>` +
+          `${esc(s.decidedTitle || s.title || s.key)}</a>` +
           `<span class="count">${prs.length}</span>` +
           `</h2><ul class="pr-list">${rows}</ul></section>`
         );

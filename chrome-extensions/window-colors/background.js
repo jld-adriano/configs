@@ -61,13 +61,20 @@ function colorForSlot(slot) {
   return `hsl(${hue}, 75%, ${lightness}%)`;
 }
 
-// Stable per-thread symbol: indexed by the same registry slot as the color,
-// so active threads never share a symbol until the list wraps.
+// Stable per-thread FALLBACK symbol: indexed by the same registry slot as the
+// color, so active threads never share a symbol until the list wraps. Only
+// used when the devin-stream sink has no LLM-picked symbol for the session
+// (Capy threads, sink down, enrichment disabled) -- the sink's summary.symbol
+// wins otherwise (see the heartbeat handler).
 const SYMBOLS = [
   "⚔️", "🛡️", "🐉", "🔥", "⚡", "🌊", "🎯", "🚀", "🧭", "⚓",
   "🎲", "🗝️", "💎", "🪐", "🌵", "🍄", "🦊", "🐙", "🦅", "🐢",
   "🐝", "🌙", "☀️", "⭐", "🌈", "🍉", "🍕", "⚙️", "🧲", "🔮",
   "🦖", "🏰", "🔔", "🍀", "🥁", "🪁", "🎈", "🧊", "🌋", "🛸",
+  "🦑", "🦩", "🦉", "🐊", "🦔", "🐫", "🦭", "🦋", "🥑", "🌻",
+  "🍒", "🥐", "🌮", "🍜", "☕", "🏹", "🪓", "🔭", "🧬", "🎻",
+  "🎸", "🎷", "📡", "🗿", "⛵", "🚂", "🏎️", "🪂", "🎡", "⛺",
+  "📚", "🖍️", "🧵", "🧸", "🥌", "♟️", "🎨", "🪀", "🪄", "🧩",
 ];
 
 function symbolForSlot(slot) {
@@ -137,11 +144,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg && msg.type === "heartbeat" && msg.key) {
-    loadRegistry().then(() => {
+    // Color stays slot-based (stable, collision-free); the SYMBOL prefers the
+    // sink's LLM pick for this session (summary.symbol) and only falls back
+    // to the slot-indexed list. Capy threads have no stream summary, so they
+    // always get the slot symbol.
+    Promise.all([loadRegistry(), getStreamSummary()]).then(([, sessions]) => {
       const slot = assignSlot(msg.key);
       chrome.storage.local.set({ registry });
       const color = colorForSlot(slot);
-      const symbol = symbolForSlot(slot);
+      const summ = sessions[msg.key];
+      const symbol = (summ && summ.symbol) || symbolForSlot(slot);
       if (msg.report && sender.tab && sender.tab.id != null) {
         tabReports[sender.tab.id] = {
           ...msg.report,

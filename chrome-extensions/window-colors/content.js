@@ -83,11 +83,18 @@
     }
   }
 
+  // Hash-fallback symbols, used only until the background registry responds
+  // (its reply prefers the sink's LLM-picked symbol; see background.js).
+  // Kept in sync with background.js SYMBOLS.
   const FALLBACK_SYMBOLS = [
     "⚔️", "🛡️", "🐉", "🔥", "⚡", "🌊", "🎯", "🚀", "🧭", "⚓",
     "🎲", "🗝️", "💎", "🪐", "🌵", "🍄", "🦊", "🐙", "🦅", "🐢",
     "🐝", "🌙", "☀️", "⭐", "🌈", "🍉", "🍕", "⚙️", "🧲", "🔮",
     "🦖", "🏰", "🔔", "🍀", "🥁", "🪁", "🎈", "🧊", "🌋", "🛸",
+    "🦑", "🦩", "🦉", "🐊", "🦔", "🐫", "🦭", "🦋", "🥑", "🌻",
+    "🍒", "🥐", "🌮", "🍜", "☕", "🏹", "🪓", "🔭", "🧬", "🎻",
+    "🎸", "🎷", "📡", "🗿", "⛵", "🚂", "🏎️", "🪂", "🎡", "⛺",
+    "📚", "🖍️", "🧵", "🧸", "🥌", "♟️", "🎨", "🪀", "🪄", "🧩",
   ];
 
   function hashInt(str) {
@@ -511,11 +518,17 @@
   }
 
   function updateBanner() {
-    const title = getSessionTitle();
+    // Prefer the sink's LLM-decided title/symbol; fall back to the tab title
+    // (raw session title) and the registry/hash symbol when the sink has no
+    // decision (enrichment disabled, sink down, brand-new session).
+    const title =
+      (streamSummary && streamSummary.decidedTitle) || getSessionTitle();
+    const symbol =
+      (streamSummary && streamSummary.symbol) || currentSymbol();
     const prs = collectPRs();
     const messages = bannerMessages();
     const state =
-      title + "|" + [...prs.keys()].join(",") + "|" +
+      symbol + "|" + title + "|" + [...prs.keys()].join(",") + "|" +
       messages.map((m) => m[0] + m[1]).join("|");
     let banner = document.getElementById("wc-banner");
     if (banner && state === lastBannerState) return;
@@ -531,9 +544,13 @@
     titleRow.id = "wc-banner-title";
     const sym = document.createElement("span");
     sym.id = "wc-banner-symbol";
-    sym.textContent = currentSymbol();
+    sym.textContent = symbol;
     const titleText = document.createElement("span");
     titleText.textContent = title;
+    // Hover shows the raw (wire) title when the LLM rewrote it.
+    if (streamSummary && streamSummary.decidedTitle) {
+      titleText.title = streamSummary.rawTitle || getSessionTitle();
+    }
     titleRow.appendChild(sym);
     titleRow.appendChild(titleText);
     banner.appendChild(titleRow);
