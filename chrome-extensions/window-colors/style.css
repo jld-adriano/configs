@@ -27,6 +27,11 @@
   padding: 4px 12px 5px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Contrast defaults (white-on-dark); content.js overrides the element's
+     color and these custom properties per background luminance. */
+  color: #fff;
+  --wc-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --wc-separator: rgba(255, 255, 255, 0.35);
 }
 
 #wc-banner-title {
@@ -35,8 +40,8 @@
   gap: 10px;
   font-size: 22px;
   font-weight: 700;
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  color: inherit;
+  text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
 }
 
 #wc-banner-title > span:last-child {
@@ -59,14 +64,14 @@
   /* 5px separator with 10px of space above and below it */
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 5px solid rgba(255, 255, 255, 0.35);
+  border-top: 5px solid var(--wc-separator, rgba(255, 255, 255, 0.35));
 }
 
 .wc-banner-msg {
   font-size: 10px;
   font-weight: 500;
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  color: inherit;
+  text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   line-height: 1.3;
   margin-bottom: 4px;
   /* ellipsize to ~10 lines each */
@@ -96,9 +101,9 @@
 #wc-banner-prs a {
   font-size: 9px;
   font-weight: 600;
-  color: #fff;
+  color: inherit;
   text-decoration: underline;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   white-space: nowrap;
 }
 
