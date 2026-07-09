@@ -9,6 +9,10 @@ the whole run.
 Windows are reloaded in small batches with a pause between them so the heavy
 Devin/Capy pages don't all rebuild their heaps at once (a full simultaneous
 reload spikes memory hard and can push the machine into swap thrash).
+
+Posts notifications at start/end: under memory pressure Chrome answers Apple
+Events very slowly, so a full run can take minutes — without feedback it looks
+like the hotkey did nothing.
 """
 
 import subprocess
@@ -16,42 +20,67 @@ import time
 
 BATCH_SIZE = 5
 BATCH_PAUSE_S = 3
+PER_WINDOW_TIMEOUT_S = 10
 
 
 def osascript(script, timeout=30):
+    """Run AppleScript; return stdout, or None if it timed out."""
     try:
         return subprocess.run(
             ["osascript", "-e", script],
             capture_output=True, text=True, timeout=timeout,
         ).stdout.strip()
     except subprocess.TimeoutExpired:
-        return ""
+        return None
+
+
+def notify(msg):
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "{msg}" with title "Chrome Reload"'],
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
 def main():
+    start = time.time()
     count = osascript(
-        'tell application "Google Chrome" to count of windows') or "0"
+        'tell application "Google Chrome" to count of windows', timeout=15)
     try:
         n = int(count)
-    except ValueError:
-        n = 0
+    except (TypeError, ValueError):
+        notify("Chrome didn't respond (busy/thrashing?) — nothing reloaded")
+        print("Could not get window count from Chrome; aborting")
+        return
 
-    reloaded = 0
+    notify(f"⏳ Reloading tabs in {n} windows ({BATCH_SIZE} per batch)…")
+
+    ok, timed_out = 0, 0
     for i in range(1, n + 1):
         # One call per window; per-window timeout so one heavy window can't
         # starve the rest.
-        osascript(
+        res = osascript(
             f'tell application "Google Chrome" to reload every tab of window {i}',
-            timeout=20,
+            timeout=PER_WINDOW_TIMEOUT_S,
         )
-        reloaded += 1
+        if res is None:
+            timed_out += 1
+        else:
+            ok += 1
         # Pause between batches (but not after the final window) to let each
         # batch settle before the next starts reloading.
-        if reloaded % BATCH_SIZE == 0 and i < n:
+        if i % BATCH_SIZE == 0 and i < n:
             time.sleep(BATCH_PAUSE_S)
 
-    print(f"Reloaded tabs across {reloaded} Chrome window(s) "
-          f"in batches of {BATCH_SIZE}")
+    elapsed = int(time.time() - start)
+    summary = f"Reloaded {ok}/{n} windows in {elapsed}s"
+    if timed_out:
+        summary += f" ({timed_out} timed out — Chrome busy)"
+    notify(summary)
+    print(summary)
 
 
 if __name__ == "__main__":
