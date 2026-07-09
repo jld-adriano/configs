@@ -77,6 +77,13 @@
   gap: 4px 12px;
   margin-top: 2px;
   pointer-events: auto;
+  /* cap the PR list at ~3 wrapped rows (row = 9px font * 1.2 + 4px gap) */
+  max-height: 41px;
+  overflow: hidden;
+}
+
+#wc-banner-prs a {
+  line-height: 1.2;
 }
 
 #wc-banner-prs a {
