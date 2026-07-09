@@ -249,6 +249,31 @@ def capture_order(windows):
     return captured
 
 
+def confirm_screenshots():
+    """Ask whether to also capture per-window screenshots (the slow step).
+
+    Auto-skips after 15s so an unattended lock never stalls; screenshots are
+    strictly optional extras on top of the layout data.
+    """
+    script = (
+        'tell application "System Events"\n'
+        '  activate\n'
+        '  display dialog "Also capture window screenshots? (slower)" '
+        'with title "AeroSpace Lock" '
+        'buttons {"Skip", "Screenshot"} default button "Skip" '
+        'giving up after 15\n'
+        'end tell'
+    )
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+    except Exception:
+        return False
+    return "button returned:Screenshot" in out and "gave up:true" not in out
+
+
 def capture_screenshots(windows, now):
     """Screenshot each window (by CGWindowID) without focusing it.
 
@@ -341,7 +366,7 @@ def main():
 
     chrome_matched = attach_chrome_tabs(windows)
     slack_count = attach_slack(windows)
-    if NO_SHOTS:
+    if NO_SHOTS or not confirm_screenshots():
         shot_count = 0
         for w in windows:
             w["screenshot"] = None
