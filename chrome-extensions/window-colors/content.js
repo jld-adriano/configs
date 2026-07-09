@@ -346,10 +346,6 @@
   // worker fetches and caches it; we ask for our session's slice on the
   // heartbeat cadence.
   let streamSummary = null;
-  // True once the background confirmed the sink is reachable (even if it has
-  // no entry for this session). Until then PR rendering fails closed: the
-  // localStorage fallback alone cannot distinguish open from merged.
-  let streamSummaryAnswered = false;
 
   function refreshStreamSummary() {
     if (!isDevinSession()) return;
@@ -360,7 +356,6 @@
           if (chrome.runtime.lastError || !resp) return; // extension reloading
           if (resp.ok) {
             streamSummary = resp.summary || null;
-            streamSummaryAnswered = true;
             tick();
           }
         }
@@ -368,19 +363,6 @@
     } catch (e) {
       // extension context invalidated; keep the last cached summary
     }
-  }
-
-  // Authoritative PR state by URL, from the captured Devin API data. Returns
-  // "open" | "merged" | "closed" | null (unknown).
-  function streamPrState(href) {
-    if (!streamSummary || !Array.isArray(streamSummary.prs)) return null;
-    for (const pr of streamSummary.prs) {
-      if (pr.url === href) {
-        if (pr.merged) return "merged";
-        return pr.state || null;
-      }
-    }
-    return null;
   }
 
   // Strict open-only predicate, applied identically to both PR sources:
@@ -417,39 +399,27 @@
   }
 
   function collectPRs() {
-    // Open PRs for this session, href -> label. Source of truth is the
-    // devin-stream summary (live Devin API captures: v2sessions /
-    // /sessions/<id>/prs carry authoritative state open|merged|closed).
-    // localStorage records only fill in titles, or act as the fallback
-    // source when the sink knows nothing about this session. Until the sink
-    // has answered at least once, render NO PRs (fail closed): the local
-    // records alone cannot distinguish open from merged, and briefly showing
-    // nothing beats confidently showing merged PRs as open.
+    // Open PRs for this session, href -> label. PR existence and state come
+    // SOLELY from the devin-stream sink summary (captured Devin API:
+    // v2sessions / /sessions/<id>/prs carry authoritative open|merged|closed).
+    // localStorage is used ONLY to supply nicer titles for those PRs -- never
+    // to decide which PRs exist or whether they're open, because those records
+    // are written when a PR tab is opened and never refreshed, so a merged PR
+    // still reads state:"open" there. If this session isn't in the summary
+    // (not captured yet, or sink unreachable), render NO PRs -- failing closed
+    // beats showing merged PRs as open, which is what the old localStorage
+    // fallback did for uncovered sessions.
     const prs = new Map();
+    if (!streamSummary || !Array.isArray(streamSummary.prs)) return prs;
+
     const local = localTabPRs();
-
-    if (streamSummary && Array.isArray(streamSummary.prs) &&
-        streamSummary.prs.length) {
-      for (const pr of streamSummary.prs) {
-        if (prs.size >= MAX_PRS) break;
-        if (!isOpenPr(pr) || !pr.url) continue;
-        const d = local.get(pr.url);
-        const label = (d && d.title) || pr.title ||
-          (pr.number ? `#${pr.number}` : pr.url);
-        prs.set(pr.url, String(label).trim());
-      }
-      return prs;
-    }
-
-    if (!streamSummaryAnswered) return prs;
-
-    for (const [href, d] of local) {
+    for (const pr of streamSummary.prs) {
       if (prs.size >= MAX_PRS) break;
-      if (!isOpenPr(d)) continue;
-      const apiState = streamPrState(href);
-      if (apiState !== null && apiState !== "open") continue; // stale record
-      const label = (d.title || `${d.repo}#${d.pull_number}`).trim();
-      prs.set(href, label);
+      if (!isOpenPr(pr) || !pr.url) continue;
+      const d = local.get(pr.url);
+      const label = (d && d.title) || pr.title ||
+        (pr.number ? `#${pr.number}` : pr.url);
+      prs.set(pr.url, String(label).trim());
     }
     return prs;
   }
