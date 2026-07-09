@@ -273,6 +273,14 @@
         title: document.title,
         kind: isDevinSession() ? "devin" : "capy",
         awaiting: isAwaiting(),
+        // Debuggability: how `awaiting` was derived ("sink" = fresh sink
+        // summary, "text" = textContent backstop) plus the sink's own view,
+        // so a stale-sink/text disagreement is visible in the sink state.
+        awaitSource,
+        sinkAwaiting: streamSummary ? !!streamSummary.awaiting : null,
+        sinkStatusEnumAt: streamSummary
+          ? streamSummary.statusEnumAt || null
+          : null,
         hudHidden,
         loaded: isDevinSession() ? devinLoaded : capyLoaded,
         sessionTitle: isDevinSession()
@@ -505,6 +513,8 @@
       tabReport: {
         loaded: isDevinSession() ? devinSessionLoaded() : capyThreadLoaded(),
         awaiting: isAwaiting(),
+        awaitSource,
+        sinkAwaitingFresh: sinkAwaitingFresh(),
         color: currentColor(),
         symbol: currentSymbol(),
         ...memoryInfo(),
@@ -607,17 +617,23 @@
   //
   // Devin sessions: the awaiting flag comes from the devin-stream sink's
   // per-session summary (`awaiting`, derived server-side from the captured
-  // Devin API: status "suspended" or a status_update with enum "blocked").
-  // NO DOM text scanning: on huge Devin DOMs, body.innerText/textContent
-  // reads allocated multi-MB strings per call (and innerText forced layout),
-  // which is exactly the overhead this extension must not add. If the sink
-  // is unreachable there is simply no awaiting line (fail quiet, mirroring
-  // the PR fail-closed rule) -- never fall back to DOM scanning.
+  // Devin API: status "suspended" or a status_update with enum "blocked")
+  // -- but ONLY while that status is FRESH. The sink only learns status when
+  // some Devin tab's captured traffic happens to include it, so its
+  // statusEnumAt can lag the page by an hour+ (observed: sink saying
+  // working/"Devin is thinking..." while the page showed "awaiting
+  // instructions"). The freshness gate below keeps the common case cheap
+  // (fresh sink -> no DOM read at all) and adds a bounded backstop: only for
+  // sessions ABSENT from the sink or with a stale/missing statusEnumAt does
+  // a single textContent scan run, on the slow render/heartbeat cadence.
+  // This is NOT the old always-on multi-MB scanning -- it never uses
+  // innerText (forces layout), never installs a MutationObserver, and stops
+  // as soon as a fresh sink status arrives (refreshStreamSummary re-fetches
+  // on the heartbeat cadence, so a newer statusEnumAt takes over again).
   //
   // Capy (and other) pages have no captured stream, so detection stays
-  // text-based there, but cheap: textContent only (no innerText: it forces
-  // layout, and textContent already contains all rendered text), on the slow
-  // render interval, and skipped entirely when the tab is hidden.
+  // text-based there, but cheap: textContent only, on the slow render
+  // interval, and skipped entirely when the tab is hidden.
   const AWAIT_PATTERNS = [
     /a?waiting (for )?instructions/i,
     /action required/i,
@@ -625,25 +641,58 @@
     /capy is idle/i,
   ];
 
-  let lastTextAwaiting = false;
+  // Sink status freshness threshold: the sink's awaiting flag is
+  // authoritative only while its statusEnumAt is at most this old.
+  const AWAIT_SINK_FRESH_MS = 4 * 60 * 1000;
 
-  function isAwaiting() {
-    if (isDevinSession()) {
-      return streamSummary ? !!streamSummary.awaiting : false;
-    }
+  function sinkAwaitingFresh() {
+    if (!streamSummary || !streamSummary.statusEnumAt) return false;
+    const t = Date.parse(streamSummary.statusEnumAt);
+    return Number.isFinite(t) && Date.now() - t <= AWAIT_SINK_FRESH_MS;
+  }
+
+  let lastTextAwaiting = false;
+  // How the last isAwaiting() value was derived: "sink" (fresh sink summary,
+  // stable, no hysteresis needed) or "text" (textContent scan, flicker-prone,
+  // hysteresis applies). Reported in heartbeats + debug panel.
+  let awaitSource = "text";
+
+  function scanTextAwaiting() {
     if (!document.body) return false;
-    // Hidden tabs keep reporting the last known state instead of paying for
-    // a fresh multi-MB textContent allocation nobody can see.
-    if (document.hidden) return lastTextAwaiting;
     const full = document.body.textContent || "";
     lastTextAwaiting = AWAIT_PATTERNS.some((p) => p.test(full));
     return lastTextAwaiting;
   }
 
-  // Hysteresis (non-Devin only): text detection can briefly drop the awaiting
-  // phrase while an SPA re-renders, making the border flash. Turn the border
-  // on immediately, but only remove it after several consecutive non-awaiting
-  // evaluations. Devin's sink-derived flag is stable and skips this.
+  function isAwaiting() {
+    if (isDevinSession()) {
+      if (sinkAwaitingFresh()) {
+        awaitSource = "sink";
+        return !!streamSummary.awaiting;
+      }
+      // Stale/absent sink status: the page is ground truth for "right now",
+      // so the text backstop wins over the stale sink. Unlike the Capy path
+      // below, hidden tabs ARE scanned -- the auto-reclaim policy
+      // (background.js) keys off awaiting for BACKGROUND tabs, which is
+      // exactly where sink staleness bites. Cost stays bounded: hidden tabs
+      // only reach here on the 30s heartbeat cadence (tick() skips them),
+      // and only while this session's sink status is stale/missing.
+      awaitSource = "text";
+      return scanTextAwaiting();
+    }
+    awaitSource = "text";
+    // Hidden tabs keep reporting the last known state instead of paying for
+    // a fresh multi-MB textContent allocation nobody can see.
+    if (document.hidden) return lastTextAwaiting;
+    return scanTextAwaiting();
+  }
+
+  // Hysteresis (text-derived detection only): text detection can briefly
+  // drop the awaiting phrase while an SPA re-renders, making the border
+  // flash. Turn the border on immediately, but only remove it after several
+  // consecutive non-awaiting evaluations. The sink-derived flag is stable
+  // and skips this; Devin pages that fell back to the text backstop get the
+  // same debounce as Capy.
   const AWAIT_OFF_TICKS = 3;
   const AWAIT_LINE_PX = 22;
   let awaitMissCount = 0;
@@ -664,7 +713,7 @@
     let border = document.getElementById("wc-await-border");
     const raw = isAwaiting();
     awaitMissCount = raw ? 0 : awaitMissCount + 1;
-    const awaiting = isDevinSession()
+    const awaiting = awaitSource === "sink"
       ? raw // sink-derived: stable, no flicker to smooth over
       : raw || (lastAwaiting === true && awaitMissCount < AWAIT_OFF_TICKS);
     if (lastAwaiting !== null && awaiting !== lastAwaiting) {
