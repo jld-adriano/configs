@@ -43,13 +43,30 @@ def notify(msg):
 
 # ── State selection ─────────────────────────────────────────────────────────
 
-def pretty_ts(name):
-    """layout-2026-06-26_09-26-17.json -> 2026-06-26 09:26:17"""
+STAMP_RE = re.compile(r"^(?:(?P<label>.+)-)?"
+                      r"(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})$")
+
+
+def parse_name(name):
+    """Split a history filename into (label, stamp-or-remainder).
+
+    layout-2026-06-26_09-26-17.json      -> ("", "2026-06-26_09-26-17")
+    layout-auto-2026-07-08_17-09-01.json -> ("auto", "2026-07-08_17-09-01")
+    """
     base = name
     if base.startswith("layout-"):
         base = base[len("layout-"):]
     if base.endswith(".json"):
         base = base[:-len(".json")]
+    m = STAMP_RE.match(base)
+    if m:
+        return (m.group("label") or "", m.group("stamp"))
+    return ("", base)
+
+
+def pretty_ts(name):
+    """layout-[label-]2026-06-26_09-26-17.json -> 2026-06-26 09:26:17"""
+    _label, base = parse_name(name)
     try:
         date, t = base.split("_")
         return f"{date} {t.replace('-', ':')}"
@@ -70,9 +87,13 @@ def load_state_index():
                 if len(cols) >= 5:
                     log_rows[cols[4]] = {"nwin": cols[1], "apps": cols[3]}
 
+    # Sort by the embedded timestamp (not the raw filename) so labelled
+    # snapshots like layout-auto-<stamp>.json interleave correctly with
+    # unlabelled layout-<stamp>.json ones, most recent first.
     files = sorted(
         (f for f in os.listdir(HISTORY_DIR)
          if f.startswith("layout-") and f.endswith(".json")),
+        key=lambda f: parse_name(f)[1],
         reverse=True,
     )
 
@@ -97,7 +118,9 @@ def load_state_index():
                 nwin, apps = "?", ""
         if len(apps) > 60:
             apps = apps[:57] + "..."
-        label = f"{pretty_ts(name)}  ·  {nwin} win  ·  {apps}"
+        tag, _stamp = parse_name(name)
+        prefix = f"[{tag}] " if tag else ""
+        label = f"{prefix}{pretty_ts(name)}  ·  {nwin} win  ·  {apps}"
         states.append((name, label, path))
     return states
 

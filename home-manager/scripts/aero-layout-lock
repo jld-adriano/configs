@@ -9,6 +9,14 @@ focused. Reapply later with aero-layout-apply.
 Each lock also archives a timestamped copy of the full snapshot under
 ~/.local/state/aerospace/history/ and appends a one-line summary to
 ~/.local/state/aerospace/lock-log.tsv, so past states can be inspected later.
+
+Env options (both unset for the manual alt-shift-s binding):
+  AERO_LOCK_NO_SHOTS=1    skip per-window screenshots (fast, no screen flashes;
+                          used by the periodic launchd autolock)
+  AERO_LOCK_LABEL=<str>   tag the snapshot: the label lands in the archive
+                          filename (layout-<label>-<stamp>.json) and in the
+                          lock-log row, so aero-layout-apply's picker can tell
+                          e.g. [auto] snapshots apart from manual ones
 """
 
 import datetime
@@ -20,6 +28,10 @@ import subprocess
 CACHE = os.path.expanduser("~/.cache/aerospace-layout.json")
 HISTORY_DIR = os.path.expanduser("~/.local/state/aerospace/history")
 LOG_FILE = os.path.expanduser("~/.local/state/aerospace/lock-log.tsv")
+
+NO_SHOTS = os.environ.get("AERO_LOCK_NO_SHOTS", "") not in ("", "0")
+# filename-safe; aero-layout-apply parses it out of layout-<label>-<stamp>.json
+LABEL = re.sub(r"[^A-Za-z0-9._-]", "", os.environ.get("AERO_LOCK_LABEL", ""))
 
 # Dump every Chrome window's tabs. Output per window:
 #   ###WIN###<TAB><active-tab-index>
@@ -270,10 +282,15 @@ def capture_screenshots(windows, now):
 
 
 def write_history(now, snap, windows, chrome_matched):
-    """Archive a timestamped snapshot and append a summary line to the log."""
+    """Archive a timestamped snapshot and append a summary line to the log.
+
+    The log grew a 6th "label" column; older rows have only 5 columns, which
+    readers must treat as label="" (manual lock).
+    """
     os.makedirs(HISTORY_DIR, exist_ok=True)
     stamp = now.strftime("%Y-%m-%d_%H-%M-%S")
-    hist_name = f"layout-{stamp}.json"
+    infix = f"{LABEL}-" if LABEL else ""
+    hist_name = f"layout-{infix}{stamp}.json"
     with open(os.path.join(HISTORY_DIR, hist_name), "w") as f:
         json.dump(snap, f, indent=2)
 
@@ -287,9 +304,10 @@ def write_history(now, snap, windows, chrome_matched):
     write_header = not os.path.exists(LOG_FILE)
     with open(LOG_FILE, "a") as f:
         if write_header:
-            f.write("timestamp\twindows\tchrome_with_tabs\tapp_counts\tsnapshot\n")
+            f.write("timestamp\twindows\tchrome_with_tabs\tapp_counts\t"
+                    "snapshot\tlabel\n")
         f.write(f"{now.isoformat()}\t{len(windows)}\t{chrome_matched}\t"
-                f"{apps}\t{hist_name}\n")
+                f"{apps}\t{hist_name}\t{LABEL}\n")
 
     return hist_name
 
@@ -323,7 +341,12 @@ def main():
 
     chrome_matched = attach_chrome_tabs(windows)
     slack_count = attach_slack(windows)
-    shot_count = capture_screenshots(windows, now)  # records w["screenshot"]
+    if NO_SHOTS:
+        shot_count = 0
+        for w in windows:
+            w["screenshot"] = None
+    else:
+        shot_count = capture_screenshots(windows, now)  # records w["screenshot"]
     capture_order(windows)  # records w["x"] for windows in multi-window workspaces
 
     snap = {
@@ -332,6 +355,8 @@ def main():
         "vd": vd,
         "windows": windows,
     }
+    if LABEL:
+        snap["label"] = LABEL
 
     # Current snapshot (what aero-layout-apply reads)
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
