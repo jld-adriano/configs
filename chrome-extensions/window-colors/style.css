@@ -56,9 +56,10 @@
 /* Last human/agent chat messages (from the devin-stream summary), shown
    below the PR list behind a separator line */
 #wc-banner-msgs {
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.35);
+  /* 10px separator with 30px of space above and below it */
+  margin-top: 30px;
+  padding-top: 30px;
+  border-top: 10px solid rgba(255, 255, 255, 0.35);
 }
 
 .wc-banner-msg {
