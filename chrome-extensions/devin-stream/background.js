@@ -113,10 +113,217 @@ chrome.alarms.onAlarm.addListener(async function (alarm) {
   }
 });
 
+// ── Active v2sessions refresh ────────────────────────────────────────────────
+// Background Devin tabs mostly stop polling v2sessions, so the sink's per-
+// session status goes stale and window-colors falls back to its text backstop.
+// Fix: every 2.5 min, one designated tab actively refetches the org-wide
+// v2sessions list. That single request describes many sessions at once, so the
+// sink re-observes every session named in the (truncated) body. The fetch runs
+// in the page's MAIN world where inject.js has wrapped window.fetch, so it is
+// (a) authenticated with the page's own cookies and (b) captured automatically
+// like any app request. Failure-safe: a 401/error just gets logged; the passive
+// capture + window-colors text backstop still cover us.
+//
+// Org/creator ids below are this user's, discovered from captured v2sessions
+// URLs (~/.local/state/devin-stream/events.jsonl); they're only a FALLBACK --
+// activePollFn prefers window.__dsLastV2SessionsUrl, the exact URL the app
+// itself last used (recorded by inject.js), so params stay current over time.
+var V2_ORG = "org_CtAKPG8BcFDDfhXn";
+var V2_CREATOR = "email%7C6754db1af8d55643c884a3f3";
+
+function fallbackV2Url() {
+  var from = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  return "https://app.devin.ai/api/" + V2_ORG + "/v2sessions" +
+    "?include_pinned=true&group_children=true&limit=30" +
+    "&order_by=updated_at&sort_direction=desc&creators=" + V2_CREATOR +
+    "&updated_date_from=" + encodeURIComponent(from) +
+    "&is_archived=false&hide_code_scans=true" +
+    "&session_type=devin&session_type=ada";
+}
+
+// Candidate tabs to run the poll in, best first: the tab the user is actually
+// looking at (active in the focused window), then all app.devin.ai tabs by
+// most-recently-accessed. Deduped. The poller walks this list and stops at the
+// first tab whose replayed request actually succeeds -- so a single tab that
+// has recorded an authenticated v2sessions request (i.e. is running the header-
+// recording inject.js) is enough, whichever tab it is.
+// The last tab that served an authenticated poll. Tried first next time so the
+// steady state is a single executeScript+fetch (not a scan). Lost on worker
+// restart, which just triggers one re-scan.
+var lastGoodPollTabId = null;
+
+async function candidatePollTabs() {
+  var list = [];
+  if (lastGoodPollTabId != null) {
+    try {
+      var g = await chrome.tabs.get(lastGoodPollTabId);
+      if (g && /^https:\/\/app\.devin\.ai\//.test(g.url || "")) list.push(g);
+    } catch (e) { lastGoodPollTabId = null; }
+  }
+  try {
+    var act = await chrome.tabs.query({
+      url: "https://app.devin.ai/*", active: true, lastFocusedWindow: true,
+    });
+    if (act) list = list.concat(act);
+  } catch (e) {}
+  try {
+    var all = await chrome.tabs.query({ url: "https://app.devin.ai/*" });
+    all.sort(function (a, b) { return (b.lastAccessed || 0) - (a.lastAccessed || 0); });
+    list = list.concat(all);
+  } catch (e) {}
+  var seen = {}, out = [];
+  for (var i = 0; i < list.length; i++) {
+    var t = list[i];
+    if (t && t.id != null && !seen[t.id]) { seen[t.id] = 1; out.push(t); }
+  }
+  return out;
+}
+
+// Injected verbatim into the page's MAIN world (serialized -- no closure over
+// worker scope; the fallback URL comes in via args). window.fetch is the
+// inject.js-wrapped fetch, so this request is captured automatically.
+// Auth: v2sessions 401s on a bare credentials-only fetch (the SPA attaches an
+// Authorization header from its in-memory token), so we replay the exact
+// request inject.js recorded from the app's own v2sessions call -- URL AND
+// headers. The bare fallback (no recorded request yet in this tab) will 401
+// until the tab has issued/observed a v2sessions request under the new
+// inject.js; that's failure-safe by design.
+function activePollFn(fallbackUrl, sessionIds) {
+  var rec = window.__dsLastV2SessionsReq;
+  var headers = (rec && rec.headers) || {};
+  var base = (rec && rec.url) || window.__dsLastV2SessionsUrl || fallbackUrl;
+  // Reuse the app's auth headers (the token isn't URL-specific), and build the
+  // query for maximum coverage of the sessions we actually care about. When the
+  // caller supplies the OPEN TABS' session ids, request exactly those via a
+  // session_ids batch -- that guarantees every open tab's session is re-folded,
+  // even idle ones far down the updated_at order that a "newest N" list misses.
+  // With no ids, fall back to a broad newest-100 org list. Origin/org/creators
+  // scope is preserved from the recorded request.
+  var url = base;
+  try {
+    var u = new URL(base, "https://app.devin.ai");
+    var p = u.searchParams;
+    ["session_ids", "pr_state", "compact", "include_initial_message",
+     "updated_date_from", "updated_date_to", "include_pinned", "limit",
+     "order_by", "sort_direction"].forEach(function (k) { p.delete(k); });
+    if (sessionIds && sessionIds.length) {
+      p.set("group_children", "true");
+      for (var i = 0; i < sessionIds.length; i++) p.append("session_ids", sessionIds[i]);
+    } else {
+      p.set("include_pinned", "true");
+      p.set("limit", "100");
+      p.set("order_by", "updated_at");
+      p.set("sort_direction", "desc");
+    }
+    p.set("is_archived", "false");
+    url = u.href;
+  } catch (e) {}
+  var used = (rec && Object.keys(headers).length) ? "recorded" :
+    (window.__dsLastV2SessionsUrl ? "recorded-url" : "fallback");
+  var opts = { credentials: "include" };
+  if (Object.keys(headers).length) opts.headers = headers;
+  var started = Date.now();
+  return fetch(url, opts).then(function (r) {
+    var ct = r.headers.get("content-type") || "";
+    if (!r.ok || !/json|text/i.test(ct)) {
+      return { ok: r.ok, status: r.status, url: url, used: used };
+    }
+    return r.text().then(function (body) {
+      // Ship the FULL (untruncated) body straight to the sink through the same
+      // window bridge inject.js uses (content.js relays it). inject.js also
+      // captures this fetch but truncates it to 24KB; this whole copy
+      // supersedes it (sink is newest-timestamp-wins), so the sink folds EVERY
+      // session named in the org-wide list, not just the ~5 that fit 24KB.
+      // Self-contained: does not depend on which inject.js build the tab runs.
+      try {
+        window.postMessage({
+          __devinStream: "devin-stream-net",
+          payload: {
+            channel: "fetch", url: url, method: "GET",
+            status: r.status, contentType: ct,
+            ms: Date.now() - started, body: body,
+          },
+        }, window.location.origin);
+      } catch (e) {}
+      return { ok: true, status: r.status, url: url, used: used, bytes: body.length };
+    });
+  }).catch(function (e) {
+    return { ok: false, status: 0, url: url, used: used, error: String(e) };
+  });
+}
+
+// Bound the fan-out. We stop at the first authenticated success, so this cap
+// only matters while no tab has an authenticated request recorded yet (all
+// attempts 401, harmlessly). Set high enough to reach whichever tab is running
+// the header-recording inject.js among many open session tabs.
+var POLL_MAX_TABS = 50;
+var POLL_MAX_IDS = 100; // keep the batch URL a sane length
+
+// devin_ids of every open app.devin.ai/sessions/<id> tab, so the poll requests
+// exactly the sessions window-colors is tracking (not just the newest N).
+async function openSessionIds() {
+  try {
+    var tabs = await chrome.tabs.query({ url: "https://app.devin.ai/sessions/*" });
+    var seen = {}, ids = [];
+    for (var i = 0; i < tabs.length; i++) {
+      var m = /\/sessions\/([a-f0-9]{8,})/i.exec(tabs[i].url || "");
+      if (m) {
+        var id = "devin-" + m[1];
+        if (!seen[id]) { seen[id] = 1; ids.push(id); }
+      }
+    }
+    return ids.slice(0, POLL_MAX_IDS);
+  } catch (e) {
+    return [];
+  }
+}
+
+async function pollV2Sessions() {
+  var tabs = await candidatePollTabs();
+  if (!tabs.length) {
+    sinkEvent({ event: "active-poll", ok: false, reason: "no-tab", bootId: BOOT_ID });
+    return;
+  }
+  var fallback = fallbackV2Url();
+  var ids = await openSessionIds();
+  var last = null, tried = 0;
+  for (var i = 0; i < tabs.length && tried < POLL_MAX_TABS; i++) {
+    var tab = tabs[i];
+    tried++;
+    var res;
+    try {
+      var out = await chrome.scripting.executeScript({
+        target: { tabId: tab.id }, world: "MAIN",
+        func: activePollFn, args: [fallback, ids],
+      });
+      res = (out && out[0]) ? out[0].result : { ok: false, reason: "no-result" };
+    } catch (e) {
+      res = { ok: false, error: String(e) };
+    }
+    last = Object.assign({ tabId: tab.id, tabUrl: tab.url }, res || {});
+    // Remember the best attempt (an authenticated recorded replay) even if it
+    // ultimately errored, so the audit log shows how far we got.
+    if (res && res.used === "recorded") last.sawRecorded = true;
+    // Stop at the first authenticated success -- one org-wide refresh is enough.
+    if (res && res.ok) { lastGoodPollTabId = tab.id; break; }
+  }
+  sinkEvent(Object.assign(
+    { event: "active-poll", tried: tried }, last || {}, { bootId: BOOT_ID }));
+}
+
+chrome.alarms.create("poll-v2sessions", { periodInMinutes: 2.5 });
+
+chrome.alarms.onAlarm.addListener(function (alarm) {
+  if (alarm.name === "poll-v2sessions") pollV2Sessions();
+});
+
 // ── Boot ────────────────────────────────────────────────────────────────────
 
 injectIntoOpenTabs().then(function (n) {
   sinkEvent({ event: "worker-start", bootId: BOOT_ID, injected: n });
+  // Prime the status refresh immediately rather than waiting for the first
+  // alarm ~2.5 min out.
+  pollV2Sessions();
 });
 
 chrome.runtime.onInstalled.addListener(function (details) {

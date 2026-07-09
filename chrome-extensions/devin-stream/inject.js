@@ -28,6 +28,73 @@
     return s.length > MAX_BODY ? s.slice(0, MAX_BODY) + "\u2026[+" + (s.length - MAX_BODY) + "]" : s;
   }
 
+  // Remember the exact v2sessions list request the app itself last made -- URL
+  // AND request headers -- so the active poller (background.js -> executeScript)
+  // can replay it verbatim. The URL keeps params current (rolling date window,
+  // current session ids); the headers carry the app's auth (v2sessions returns
+  // 401 to a bare credentials-only fetch -- it needs the Authorization header
+  // the SPA attaches from its in-memory token). Only GET list requests are
+  // recorded. Headers stay on `window` (same origin as the app, which already
+  // holds this token) and are NEVER shipped to the sink.
+  function headersToObj(h) {
+    var out = {};
+    try {
+      if (!h) return out;
+      if (typeof Headers !== "undefined" && h instanceof Headers) {
+        h.forEach(function (v, k) { out[k] = v; });
+      } else if (Array.isArray(h)) {
+        h.forEach(function (p) { if (p && p.length === 2) out[p[0]] = p[1]; });
+      } else if (typeof h === "object") {
+        Object.keys(h).forEach(function (k) { out[k] = h[k]; });
+      }
+    } catch (e) {}
+    return out;
+  }
+
+  // Only the headers needed to authenticate/route the replayed request are
+  // kept -- notably `authorization` (the SPA's in-memory bearer). Datadog/
+  // trace headers are dropped so the replay doesn't pollute the app's tracing.
+  var V2_HEADER_KEEP = { "authorization": 1, "x-cog-org-id": 1, "accept": 1 };
+
+  // Prefer the broadest-coverage v2sessions request the app makes so one poll
+  // re-observes as many sessions as possible: the pinned/full list and the
+  // explicit session_ids batch describe many sessions; the incremental
+  // "updated since <recent>" delta poll usually returns almost nothing. Rank
+  // by breadth and only replace the stored request with an equal-or-broader
+  // one (equal rank still refreshes, keeping auth headers current).
+  function v2Rank(u) {
+    // Broadest first. The session_ids batch enumerates ~every open session
+    // explicitly (best coverage of the tabs window-colors tracks), so it wins
+    // over the 30-item pinned list, which wins over a plain list, which wins
+    // over the near-empty "updated since <recent>" delta poll.
+    if (/[?&]session_ids=/.test(u)) return 4;
+    if (/[?&]include_pinned=true/.test(u)) return 3;
+    if (/sort_direction=asc/.test(u) && /updated_date_from=/.test(u)) return 1;
+    return 2;
+  }
+
+  function recordV2(url, method, input, init) {
+    if (method && !/^get$/i.test(method)) return;
+    try {
+      var u = new URL(url, window.location.href);
+      if (!/\/v2sessions$/.test(u.pathname)) return;
+      var rank = v2Rank(u.href);
+      var prev = window.__dsLastV2SessionsReq;
+      if (prev && prev.rank > rank) return; // keep the broader request
+      window.__dsLastV2SessionsUrl = u.href;
+      var raw = {};
+      if (input && typeof input === "object" && input.headers) {
+        Object.assign(raw, headersToObj(input.headers));
+      }
+      if (init && init.headers) Object.assign(raw, headersToObj(init.headers));
+      var headers = {};
+      Object.keys(raw).forEach(function (k) {
+        if (V2_HEADER_KEEP[k.toLowerCase()]) headers[k] = raw[k];
+      });
+      window.__dsLastV2SessionsReq = { url: u.href, headers: headers, rank: rank };
+    } catch (e) {}
+  }
+
   // Only capture bodies for Devin's own API/host traffic; skip static assets,
   // analytics, and cross-origin noise to keep volume sane.
   function interesting(url) {
@@ -47,6 +114,7 @@
     window.fetch = function (input, init) {
       var url = typeof input === "string" ? input : (input && input.url) || "";
       var method = (init && init.method) || (input && input.method) || "GET";
+      recordV2(url, method, input, init);
       var started = Date.now();
       var p = realFetch.apply(this, arguments);
       if (interesting(url)) {
@@ -79,6 +147,7 @@
     var send = RealXHR.prototype.send;
     RealXHR.prototype.open = function (method, url) {
       this.__ds = { method: method, url: url, started: Date.now() };
+      recordV2(url, method);
       return open.apply(this, arguments);
     };
     RealXHR.prototype.send = function () {
