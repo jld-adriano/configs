@@ -82,6 +82,15 @@ Payload sources (documented from captured traffic):
         reasoning/tool types (devin_thoughts, one_line_thoughts,
         thought_summary, shell_*, terminal_update, mcp_*, ...) are excluded,
         as are streaming partials (ops frames without a full "message").
+  * WS  send frames on the same socket -- the user's OUTGOING chat message
+        ({type:"user_message", message, origin:"web", ...}) -- are folded
+        IMMEDIATELY, stamped with capture time, so the banner shows the human
+        turn without waiting for the server echo or a v2sessions poll. The
+        server-timestamped copy arriving later collapses into the same entry
+        (near-duplicate guard: same role + normalized text within 5 min).
+  * "request" captures -- OUTGOING POST bodies from inject.js -- are parsed
+        the same way for message/send/chat-ish api paths (defensive: no REST
+        send endpoint observed yet; unparsed send POSTs are logged).
 
 Inspect with:
 
@@ -175,9 +184,22 @@ HUMAN_MSG_TYPES = {"user_message"}
 INITIAL_HUMAN_TYPE = "initial_user_message"
 AGENT_MSG_TYPES = {"devin_message"}
 
+# A user message captured on its way OUT (WS send frame / send POST body) is
+# folded immediately with the CAPTURE time; the same message arrives again
+# seconds later with the SERVER time (WS echo, v2sessions). Two messages with
+# the same role and normalized text within this window are the same message.
+NEAR_DUP_S = 300
+
 # Trim sub-microsecond precision (WS events carry nanoseconds) so
 # datetime.fromisoformat can parse the timestamp.
 _FRAC = re.compile(r"(\.\d{6})\d+")
+# Capture timestamps use %z ("-0700"); fromisoformat before 3.11 needs a colon.
+_TZ_NOCOLON = re.compile(r"([+-]\d{2})(\d{2})$")
+# Session id embedded in an api URL (WS /api/events/devin-<id>/live, ...).
+_URL_DEVIN_ID = re.compile(r"devin-([0-9a-f]{8,})")
+# Candidate send-message REST paths (none observed yet -- chat goes over the
+# WS -- but parsed defensively in case the app grows/changes one).
+_SEND_POST_PATH = re.compile(r"/api/.*(message|send|chat)", re.I)
 _SESSION_API = re.compile(r"/api/sessions/devin-([0-9a-f]+)(/prs)?$")
 # v2sessions bodies are truncated at 24KB by the extension, so only the
 # leading 1-2 session objects survive JSON decoding -- but the truncated TAIL
@@ -204,7 +226,7 @@ def _epoch(ts):
         return 0.0
     try:
         return datetime.fromisoformat(
-            _FRAC.sub(r"\1", ts.replace("Z", "+00:00"))
+            _TZ_NOCOLON.sub(r"\1:\2", _FRAC.sub(r"\1", ts.replace("Z", "+00:00")))
         ).timestamp()
     except ValueError:
         return 0.0
@@ -213,6 +235,11 @@ def _epoch(ts):
 def _trunc_msg(text, limit=MSG_TRUNC):
     text = " ".join(str(text).split())
     return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _norm_text(text):
+    """Normalized comparison key for near-duplicate message detection."""
+    return " ".join(str(text or "").split()).casefold()[:500]
 
 
 def _summary_for(sid):
@@ -244,7 +271,7 @@ def _sid_from_devin_id(devin_id):
     return _safe_session_id(devin_id)
 
 
-def _note_message(summ, contents):
+def _note_message(summ, contents, approx=False):
     """Record a chat message if it's newer (max message timestamp wins).
 
     Only full chat messages count: user_message (human) and devin_message
@@ -256,6 +283,11 @@ def _note_message(summ, contents):
     time: v2sessions re-sends old contents on every poll, so stamping them
     with capture time made the FIRST user message look perpetually newest.
     A message without a timestamp only fills an empty slot (epoch 0).
+
+    approx=True marks a message stamped with CAPTURE time (an outgoing send
+    seen before the server assigned a timestamp); when the same message later
+    arrives with a server timestamp, the server time replaces the estimate
+    (see _note_recent's near-duplicate guard).
 
     initial_user_message is handled apart: it is the session's first message,
     used only as a fallback while no real user_message has been captured.
@@ -278,28 +310,49 @@ def _note_message(summ, contents):
     else:
         return
     ts = contents.get("timestamp")
-    _note_recent(summ, role, text, ts)
-    if _epoch(ts) >= _epoch(summ.get(key + "At")):
+    _note_recent(summ, role, text, ts, approx=approx)
+    prev_at = summ.get(key + "At")
+    if _epoch(ts) >= _epoch(prev_at):
         summ[key] = _trunc_msg(text)
+        summ[key + "At"] = ts
+    elif (_norm_text(summ.get(key)) == _norm_text(_trunc_msg(text))
+          and abs(_epoch(ts) - _epoch(prev_at)) <= NEAR_DUP_S):
+        # Same message re-arriving with a slightly EARLIER (server) timestamp
+        # than the capture-time estimate we stored: adopt the authoritative ts.
         summ[key + "At"] = ts
 
 
-def _note_recent(summ, role, text, ts):
+def _note_recent(summ, role, text, ts, approx=False):
     """Keep the last RECENT_MSGS chat messages, oldest -> newest.
 
-    Deduped by (role, ts): the same message arrives repeatedly (v2sessions
-    re-polls, WS streaming finals, backfill), and a re-arrival may carry a
-    longer final text, so it replaces the stored one. Untimestamped messages
-    are skipped -- they can't be ordered into a transcript.
+    Deduped by (role, ts), plus a near-duplicate guard: an outgoing send is
+    folded immediately with the CAPTURE time (approx=True), and the same
+    message re-arrives seconds later with the SERVER time (WS echo,
+    v2sessions) -- same role + same normalized text within NEAR_DUP_S
+    collapses to one entry, and the server timestamp replaces the estimate.
+    A re-arrival may carry a longer final text, so it replaces the stored
+    one. Untimestamped messages are skipped -- they can't be ordered into a
+    transcript.
     """
     if not ts:
         return
     recent = summ["recentMessages"]
+    norm = _norm_text(text)
     for m in recent:
-        if m["ts"] == ts and m["role"] == role:
+        if m["role"] != role:
+            continue
+        if m["ts"] == ts or (norm and _norm_text(m["text"]) == norm
+                             and abs(_epoch(m["ts"]) - _epoch(ts)) <= NEAR_DUP_S):
+            if m.get("approx") and not approx:
+                m["ts"] = ts  # authoritative server time replaces the estimate
+                m.pop("approx", None)
+                recent.sort(key=lambda x: _epoch(x["ts"]))
             m["text"] = _trunc_msg(text, RECENT_TRUNC)
             return
-    recent.append({"role": role, "text": _trunc_msg(text, RECENT_TRUNC), "ts": ts})
+    entry = {"role": role, "text": _trunc_msg(text, RECENT_TRUNC), "ts": ts}
+    if approx:
+        entry["approx"] = True
+    recent.append(entry)
     recent.sort(key=lambda m: _epoch(m["ts"]))
     del recent[:-RECENT_MSGS]
     _ensure_human_recent(summ)
@@ -326,6 +379,29 @@ def _ensure_human_recent(summ):
     del recent[0]
     recent.append({"role": "human", "text": text, "ts": ts})
     recent.sort(key=lambda m: _epoch(m["ts"]))
+
+
+def _note_immediate_human(record, text, url):
+    """Fold a just-captured OUTGOING chat message as this session's human turn.
+
+    Stamped with the envelope's capture time (the server hasn't assigned one
+    yet); marked approx so the server-timestamped copy arriving moments later
+    (WS echo, v2sessions) replaces the estimate instead of duplicating. The
+    session id comes from the request URL (devin-<id>), falling back to the
+    capturing tab's session.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return
+    m = _URL_DEVIN_ID.search(url or "")
+    sid = _safe_session_id(m.group(1)) if m \
+        else _safe_session_id(record.get("sessionId"))
+    if not sid:
+        return
+    ts = record.get("ts")
+    summ = _summary_for(sid)
+    summ["lastSeen"] = ts
+    _note_message(summ, {"type": "user_message", "message": text,
+                         "timestamp": ts}, approx=True)
 
 
 def _derive_awaiting(summ):
@@ -466,7 +542,21 @@ def _fold_net(record):
             frame = json.loads(body)
         except ValueError:
             return
-        if not isinstance(frame, dict) or frame.get("type") != "devin_event":
+        if not isinstance(frame, dict):
+            return
+        # OUTGOING send frame: the user's chat message on its way to the
+        # server ({"type":"user_message","message":...,"origin":"web",...}).
+        # Fold it immediately, stamped with capture time, so the banner shows
+        # the human turn without waiting for the server echo / v2sessions
+        # poll (which is where the 5-minute lag came from). The echo arriving
+        # seconds later with the server timestamp collapses into this entry
+        # via the near-duplicate guard.
+        if d.get("event") == "send":
+            if frame.get("type") == "user_message":
+                _note_immediate_human(record, frame.get("message"),
+                                      d.get("url"))
+            return
+        if frame.get("type") != "devin_event":
             return
         sid = _sid_from_devin_id(frame.get("devin_id"))
         ev = frame.get("event")
@@ -478,6 +568,35 @@ def _fold_net(record):
                              ev.get("timestamp"))
             else:
                 _note_message(summ, ev)
+        return
+
+    # OUTGOING request bodies captured by inject.js (channel "request").
+    # No REST send-message endpoint has been observed (the web app sends chat
+    # over the live WS), but if one appears -- or the app changes -- parse it
+    # defensively: a POST to a message/send/chat-ish api path whose JSON body
+    # carries the message text becomes an immediate human message.
+    if d.get("channel") == "request":
+        if (d.get("method") or "").upper() != "POST":
+            return
+        url_path = (d.get("url") or "").split("?")[0]
+        if not _SEND_POST_PATH.search(url_path):
+            return
+        text = None
+        try:
+            b = json.loads(body)
+        except ValueError:
+            b = None
+        if isinstance(b, dict):
+            for k in ("message", "text", "content", "prompt"):
+                v = b.get(k)
+                if isinstance(v, str) and v.strip():
+                    text = v
+                    break
+        if text is None:
+            _log("request: unparsed send POST %s (body %r)"
+                 % (url_path[:160], body[:120]))
+            return
+        _note_immediate_human(record, text, d.get("url"))
         return
 
     url = (d.get("url") or "").split("?")[0]

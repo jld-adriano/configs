@@ -16,6 +16,7 @@
   var TAG = "devin-stream-net";
   var MAX_BODY = 24000; // hard truncation per captured body (chars)
   var MAX_WS_FRAME = 24000;
+  var MAX_REQ_BODY = 3000; // truncation for captured OUTGOING request bodies
 
   function post(data) {
     try {
@@ -108,6 +109,37 @@
     }
   }
 
+  // Capture OUTGOING request bodies (chat sends etc.) as their own records.
+  // The sink turns send-message bodies into an immediate human message for
+  // the session instead of waiting for the server to echo it back. Datadog
+  // /intake/ beacons are excluded (high volume, compressed, never chat).
+  function postRequest(url, method, body) {
+    if (typeof body !== "string" || !body) return;
+    post({
+      channel: "request", url: url, method: method,
+      body: body.length > MAX_REQ_BODY
+        ? body.slice(0, MAX_REQ_BODY) + "\u2026[+" + (body.length - MAX_REQ_BODY) + "]"
+        : body,
+    });
+  }
+
+  function captureRequestBody(url, method, input, init) {
+    try {
+      if (!/^(POST|PUT|PATCH)$/i.test(method || "")) return;
+      if (!interesting(url) || /\/intake\//.test(url)) return;
+      var body = init && init.body;
+      if (typeof body === "string") {
+        postRequest(url, method, body);
+      } else if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+        postRequest(url, method, String(body));
+      } else if (!body && input && typeof input === "object"
+                 && typeof input.clone === "function" && typeof input.text === "function") {
+        // Request-object form: body is only reachable async via clone().
+        input.clone().text().then(function (b) { postRequest(url, method, b); }).catch(function () {});
+      }
+    } catch (e) {}
+  }
+
   // ── fetch ──────────────────────────────────────────────────────────────
   var realFetch = window.fetch;
   if (realFetch) {
@@ -115,6 +147,7 @@
       var url = typeof input === "string" ? input : (input && input.url) || "";
       var method = (init && init.method) || (input && input.method) || "GET";
       recordV2(url, method, input, init);
+      captureRequestBody(url, method, input, init);
       var started = Date.now();
       var p = realFetch.apply(this, arguments);
       if (interesting(url)) {
@@ -150,8 +183,11 @@
       recordV2(url, method);
       return open.apply(this, arguments);
     };
-    RealXHR.prototype.send = function () {
+    RealXHR.prototype.send = function (data) {
       var self = this;
+      if (self.__ds && typeof data === "string") {
+        captureRequestBody(self.__ds.url, self.__ds.method, null, { body: data });
+      }
       if (self.__ds && interesting(self.__ds.url)) {
         self.addEventListener("load", function () {
           try {
