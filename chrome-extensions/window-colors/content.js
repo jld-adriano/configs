@@ -115,6 +115,12 @@
   // Collapsed = a minimal strip (symbol + the two small title-row icons).
   let bannerHidden = false;
 
+  // Per-tab expanded message row (click-to-expand): index into the banner's
+  // message list, -1 = none. Session-scoped like bannerHidden; folded into
+  // the render-state key so rebuilds reproduce it, and toggled in place on
+  // click (no rebuild) so it works even while the reply input holds text.
+  let expandedMsgIdx = -1;
+
   // ── Global HUD visibility toggle ──────────────────────────────────────────
   // A tiny always-visible dot (bottom-right) hides/shows the badge, banner and
   // awaiting line in EVERY tab. Persisted in chrome.storage.local so one click
@@ -502,6 +508,164 @@
     return out;
   }
 
+  // ── Banner reply input ────────────────────────────────────────────────────
+  // A single-line input at the bottom of the banner that forwards text into
+  // the page's real chat input (Devin's main textarea/contenteditable) and
+  // submits it, as if typed there. The <input> NODE is created exactly once
+  // and re-attached to every rebuilt banner so in-progress text survives the
+  // 15s re-render; on top of that, updateBanner() defers the rebuild entirely
+  // while the input is focused or non-empty, so focus is never yanked away
+  // mid-typing (re-attaching a node loses focus even though value survives).
+  let replyInput = null;
+
+  function getReplyInput() {
+    if (replyInput) return replyInput;
+    replyInput = document.createElement("input");
+    replyInput.id = "wc-banner-reply";
+    replyInput.type = "text";
+    replyInput.placeholder = "reply to Devin…";
+    replyInput.autocomplete = "off";
+    replyInput.spellcheck = false;
+    replyInput.addEventListener("keydown", (e) => {
+      // Keep banner keystrokes away from the page's global hotkey handlers.
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        const text = replyInput.value.trim();
+        if (text) sendReply(text);
+      } else if (e.key === "Escape") {
+        replyInput.blur();
+      }
+    });
+    replyInput.addEventListener("keyup", (e) => e.stopPropagation());
+    replyInput.addEventListener("keypress", (e) => e.stopPropagation());
+    return replyInput;
+  }
+
+  function flashReplyError(msg) {
+    if (!replyInput) return;
+    replyInput.classList.add("wc-reply-error");
+    replyInput.title = msg;
+    setTimeout(() => {
+      if (!replyInput) return;
+      replyInput.classList.remove("wc-reply-error");
+      replyInput.title = "";
+    }, 2500);
+  }
+
+  // Locate the page's real chat input. Devin renders either a <textarea> or a
+  // contenteditable region; inspect defensively: gather every plausible
+  // editable element, drop invisible ones and our own HUD, then prefer (a) a
+  // placeholder/aria-label that smells like the chat box and (b) the one
+  // lowest on the screen (the composer sits under the transcript).
+  function findDevinChatInput() {
+    const nodes = document.querySelectorAll(
+      'textarea, [contenteditable="true"], [role="textbox"]');
+    let best = null;
+    let bestScore = -Infinity;
+    for (const el of nodes) {
+      if (el.closest("#wc-banner") || el.closest("#wc-debug-panel")) continue;
+      if (el.disabled || el.readOnly) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 80 || r.height < 14) continue;
+      if (r.bottom <= 0 || r.top >= window.innerHeight) continue;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === "hidden" || cs.display === "none") continue;
+      const hint = (
+        (el.getAttribute("placeholder") || "") + " " +
+        (el.getAttribute("aria-label") || "") + " " +
+        (el.getAttribute("data-placeholder") || "")
+      ).toLowerCase();
+      let score = 0;
+      if (/devin|ask|reply|message|follow.?up|chat/.test(hint)) score += 10000;
+      score += r.top; // lower on the page wins (composer sits at the bottom)
+      score += Math.min(r.width, 800) / 100; // wider inputs are likelier
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    return best;
+  }
+
+  function chatInputValue(el) {
+    return el.tagName === "TEXTAREA" || el.tagName === "INPUT"
+      ? el.value
+      : el.textContent || "";
+  }
+
+  // React-controlled inputs ignore plain .value writes (React compares
+  // against its own tracked value), so go through the NATIVE prototype value
+  // setter and then dispatch a bubbling "input" event -- that is exactly what
+  // React's onChange delegation listens for. Contenteditable gets textContent
+  // + a bubbling InputEvent instead.
+  function setChatInputValue(el, text) {
+    el.focus();
+    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+      const proto = el.tagName === "TEXTAREA"
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    } else {
+      el.textContent = text;
+      el.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        inputType: "insertText",
+        data: text,
+      }));
+    }
+  }
+
+  // Send-button fallback: walk up from the chat input looking for a nearby
+  // button that is labelled send/submit (aria-label, text, or type=submit).
+  function findSendButton(inputEl) {
+    let scope = inputEl;
+    for (let depth = 0; depth < 6 && scope; depth++, scope = scope.parentElement) {
+      for (const b of scope.querySelectorAll('button, [role="button"]')) {
+        if (b.closest("#wc-banner")) continue;
+        const label = ((b.getAttribute("aria-label") || "") + " " +
+          (b.textContent || "")).toLowerCase();
+        if (/send|submit/.test(label)) return b;
+        if ((b.getAttribute("type") || "").toLowerCase() === "submit") return b;
+      }
+    }
+    return null;
+  }
+
+  function sendReply(text) {
+    const target = findDevinChatInput();
+    if (!target) {
+      flashReplyError("Devin chat input not found on this page yet");
+      return;
+    }
+    try {
+      setChatInputValue(target, text);
+      // Submit path 1: a synthetic Enter on the chat input (content-script
+      // events are real DOM events; React key handlers normally fire on them).
+      const key = (type) => new KeyboardEvent(type, {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(key("keydown"));
+      target.dispatchEvent(key("keyup"));
+      // Submit path 2: if the composer still holds the text a beat later the
+      // Enter didn't take -- click the send button next to the input instead.
+      setTimeout(() => {
+        if (chatInputValue(target).trim() === "") return; // Enter worked
+        const btn = findSendButton(target);
+        if (btn) btn.click();
+      }, 200);
+      replyInput.value = "";
+      replyInput.focus();
+    } catch (e) {
+      flashReplyError("Send failed: " + e);
+    }
+  }
+
   function toggleDebugPanel() {
     const existing = document.getElementById("wc-debug-panel");
     if (existing) {
@@ -534,6 +698,23 @@
     document.documentElement.appendChild(panel);
   }
 
+  // Apply the click-to-expand state to a banner's message rows: the expanded
+  // row gets .wc-msg-expanded (clamp removed, scrollable), and the banner
+  // gets .wc-msg-expanded-mode, which CSS uses to hide the OTHER rows and
+  // the PR row so the message gets the whole content area. Called both at
+  // build time (updateBanner) and in place from row click handlers.
+  function applyMsgExpansion(banner) {
+    banner = banner || document.getElementById("wc-banner");
+    if (!banner) return;
+    const rows = banner.querySelectorAll(".wc-banner-msg");
+    banner.classList.toggle(
+      "wc-msg-expanded-mode",
+      expandedMsgIdx >= 0 && expandedMsgIdx < rows.length);
+    rows.forEach((row, idx) => {
+      row.classList.toggle("wc-msg-expanded", idx === expandedMsgIdx);
+    });
+  }
+
   function updateBanner() {
     // Prefer the sink's LLM-decided title/symbol; fall back to the tab title
     // (raw session title) and the registry/hash symbol when the sink has no
@@ -544,12 +725,22 @@
       (streamSummary && streamSummary.symbol) || currentSymbol();
     const prs = collectPRs();
     const messages = bannerMessages();
+    // The expanded row is an index into `messages`; if the list shrank (or
+    // vanished) since it was expanded, drop back to the normal view.
+    if (expandedMsgIdx >= messages.length) expandedMsgIdx = -1;
     const state =
-      (bannerHidden ? "H|" : "S|") +
+      (bannerHidden ? "H|" : "S|") + expandedMsgIdx + "|" +
       symbol + "|" + title + "|" + [...prs.keys()].join(",") + "|" +
       messages.map((m) => m[0] + m[1]).join("|");
     let banner = document.getElementById("wc-banner");
     if (banner && state === lastBannerState) return;
+    // Never tear the banner down out from under an in-use reply input: a
+    // rebuild would re-attach the same node (value survives) but still steal
+    // focus mid-typing. Content changes just wait for the next 15s tick.
+    if (banner && replyInput &&
+        (document.activeElement === replyInput || replyInput.value !== "")) {
+      return;
+    }
     lastBannerState = state;
     if (banner) banner.remove();
 
@@ -626,14 +817,33 @@
     if (messages.length) {
       const msgs = document.createElement("div");
       msgs.id = "wc-banner-msgs";
-      for (const [icon, text] of messages) {
+      messages.forEach(([icon, text], idx) => {
         const row = document.createElement("div");
         row.className = "wc-banner-msg";
+        row.title = "Click to expand/collapse this message";
         renderMsgText(row, icon + " " + text);
+        row.addEventListener("click", (e) => {
+          // Links inside rows must still navigate, not toggle expansion.
+          if (e.target && e.target.closest && e.target.closest("a")) return;
+          e.stopPropagation();
+          expandedMsgIdx = expandedMsgIdx === idx ? -1 : idx;
+          applyMsgExpansion();
+          // Keep the render-state key in sync so the next 15s tick doesn't
+          // see a "changed" state and rebuild the banner just for this (a
+          // rebuild would also be skipped while the reply input holds text,
+          // which is exactly why expansion is applied in place).
+          lastBannerState = lastBannerState.replace(
+            /^([HS]\|)-?\d+\|/, "$1" + expandedMsgIdx + "|");
+        });
         msgs.appendChild(row);
-      }
+      });
       banner.appendChild(msgs);
     }
+    applyMsgExpansion(banner);
+
+    // Reply input: always the SAME node (see getReplyInput), re-attached to
+    // each rebuilt banner so any typed-but-unsent text is never discarded.
+    banner.appendChild(getReplyInput());
 
     document.documentElement.appendChild(banner);
   }
@@ -751,14 +961,15 @@
 
   // Shared visuals for both placements. Inline so it wins over any stale
   // injected stylesheet: long-lived tabs keep the style.css they loaded with
-  // and that copy wins the cascade over re-injected CSS, so geometry AND
-  // animation must be inline too (the @keyframes themselves live in
-  // style.css).
+  // and that copy wins the cascade over re-injected CSS. The gradient is
+  // deliberately STATIC (animation:none, explicit to beat stale stylesheets
+  // that still carry the old wc-await-sweep animation): dozens of these bars
+  // animating across visible windows kept the compositor permanently busy.
   const AWAIT_LINE_BASE_CSS =
     "height:" + AWAIT_LINE_PX + "px;border:0;" +
     "background:linear-gradient(90deg,#ff6a00,#ffd27a,#ff6a00);" +
     "background-size:200% 100%;box-sizing:border-box;pointer-events:none;" +
-    "animation:wc-await-sweep 1.8s ease-in-out infinite alternate;";
+    "animation:none;";
 
   function updateAwaitBorder() {
     let border = document.getElementById("wc-await-border");

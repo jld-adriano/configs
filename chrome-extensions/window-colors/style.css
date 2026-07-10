@@ -100,7 +100,8 @@
 
 #wc-banner.wc-collapsed #wc-banner-title-text,
 #wc-banner.wc-collapsed #wc-banner-prs,
-#wc-banner.wc-collapsed #wc-banner-msgs {
+#wc-banner.wc-collapsed #wc-banner-msgs,
+#wc-banner.wc-collapsed #wc-banner-reply {
   display: none;
 }
 
@@ -157,30 +158,84 @@
 }
 
 .wc-banner-msg {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
   color: inherit;
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   line-height: 1.3;
   margin-bottom: 4px;
-  /* ellipsize to 3 lines each */
+  /* ellipsize to 5 lines each */
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* rows are clickable (click-to-expand); the banner is pointer-events:none */
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .wc-banner-msg:last-child { margin-bottom: 0; }
 
+/* Click-to-expand: the clicked row loses its line clamp and can scroll;
+   while one row is expanded the banner hides the other rows and the PR row
+   so the full message gets the whole content area. Click again to reset. */
+.wc-banner-msg.wc-msg-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+#wc-banner.wc-msg-expanded-mode #wc-banner-prs,
+#wc-banner.wc-msg-expanded-mode .wc-banner-msg:not(.wc-msg-expanded) {
+  display: none;
+}
+
 /* Links parsed out of message text: short clickable labels, styled like the
    PR links. The banner is pointer-events:none, so re-enable on the anchors. */
 .wc-banner-msg a {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: inherit;
   text-decoration: underline;
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   pointer-events: auto;
+}
+
+/* Reply input at the bottom of the banner: forwards text into the page's
+   real chat composer on Enter. The banner is pointer-events:none, so the
+   input opts back in. Subtle glassy styling that inherits banner contrast. */
+#wc-banner-reply {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 3px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--wc-separator, rgba(255, 255, 255, 0.35));
+  border-radius: 6px;
+  outline: none;
+  pointer-events: auto;
+}
+
+#wc-banner-reply::placeholder {
+  color: inherit;
+  opacity: 0.55;
+}
+
+#wc-banner-reply:focus {
+  border-color: currentColor;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+/* Brief error state: no chat input found on the page / send threw */
+#wc-banner-reply.wc-reply-error {
+  border-color: #ff3b30;
+  box-shadow: 0 0 6px rgba(255, 59, 48, 0.8);
 }
 
 #wc-banner-prs {
@@ -207,12 +262,13 @@
   white-space: nowrap;
 }
 
-/* Awaiting instructions: an animated gradient line. With a banner present it
-   is appended INSIDE the banner as its last child (attached to the bottom
-   edge; the banner never shifts, it just extends downward); on bannerless
-   pages it stays pinned across the top of the viewport. Geometry and
-   animation are duplicated inline on the element to beat stale stylesheets
-   in long-lived tabs; the @keyframes live only here. */
+/* Awaiting instructions: a STATIC gradient line (deliberately not animated:
+   dozens of visible awaiting bars sweeping at once kept the compositor
+   permanently busy). With a banner present it is appended INSIDE the banner
+   as its last child (attached to the bottom edge; the banner never shifts,
+   it just extends downward); on bannerless pages it stays pinned across the
+   top of the viewport. Geometry is duplicated inline on the element to beat
+   stale stylesheets in long-lived tabs. */
 #wc-await-border {
   position: fixed;
   /* inset/border set explicitly to beat the stale bottom-line rule that
@@ -225,12 +281,7 @@
   box-sizing: border-box;
   z-index: 2147483647;
   pointer-events: none;
-  animation: wc-await-sweep 1.8s ease-in-out infinite alternate;
-}
-
-@keyframes wc-await-sweep {
-  from { background-position: 0% 50%; }
-  to   { background-position: 100% 50%; }
+  animation: none;
 }
 
 /* Always-visible dot to show/hide the HUD globally (bottom-right; top-right
