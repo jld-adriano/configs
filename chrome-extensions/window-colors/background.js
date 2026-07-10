@@ -93,7 +93,9 @@ const tabReports = {};
 // sink's per-session summary and hands out cached per-session slices.
 
 const STREAM_SUMMARY_URL = "http://127.0.0.1:48292/summary";
-const STREAM_SUMMARY_TTL_MS = 25 * 1000;
+// 8s TTL matches the visible-tab fast poll in content.js: no matter how many
+// tabs ask, the sink (local, one endpoint) sees at most one fetch per 8s.
+const STREAM_SUMMARY_TTL_MS = 8 * 1000;
 let streamSummaryCache = { sessions: {}, fetchedAt: 0 };
 
 async function getStreamSummary() {

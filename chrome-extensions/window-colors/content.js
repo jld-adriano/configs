@@ -12,6 +12,11 @@
   // this slow timer plus push events (storage changes, summary responses).
   const RENDER_INTERVAL_MS = 15 * 1000;
   const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+  // Visible Devin tabs poll the (background-cached, local) sink summary on a
+  // fast cadence so the banner's status line tracks what Devin is doing in
+  // near-realtime. Hidden tabs stay on the 30s heartbeat cadence -- dozens of
+  // background tabs must not multiply load, and nobody can see them anyway.
+  const SUMMARY_FAST_INTERVAL_MS = 8 * 1000;
 
   function hashToHSL(str) {
     let hash = 0;
@@ -488,16 +493,18 @@
     }
   }
 
-  // The banner's chat rows: the last 4 back-and-forth messages (oldest ->
+  // The banner's chat rows: the last 6 back-and-forth messages (oldest ->
   // newest, as the conversation happened) from the sink's recentMessages,
   // falling back to the older two-field summary shape when absent.
+  const MAX_MSGS = 6;
+
   function bannerMessages() {
     if (!streamSummary) return [];
     if (Array.isArray(streamSummary.recentMessages) &&
         streamSummary.recentMessages.length) {
       return streamSummary.recentMessages
         .filter((m) => m && m.text)
-        .slice(-4)
+        .slice(-MAX_MSGS)
         .map((m) => [m.role === "human" ? "👤" : "🤖", m.text]);
     }
     const out = [];
@@ -506,6 +513,61 @@
     if (streamSummary.lastAgentMessage)
       out.push(["🤖", streamSummary.lastAgentMessage]);
     return out;
+  }
+
+  // Adaptive per-row line budget, heavily top-heavy (13-line total budget):
+  // the NEWEST message gets 10 lines, the second-newest 3, and anything
+  // older collapses to a single-line context crumb. With two long messages
+  // the crumbs' 1-liners are what you see beyond the [10,3] pair; short
+  // messages simply don't fill their clamps, so more of the (up to 6) rows
+  // fit visually. Array is NEWEST-FIRST; rows still render oldest -> newest
+  // like a transcript, so row idx maps to alloc[count - 1 - idx].
+  const MSG_LINE_ALLOC = [10, 3, 1, 1, 1, 1];
+
+  function msgLineClamp(idx, count) {
+    return MSG_LINE_ALLOC[count - 1 - idx] || 1;
+  }
+
+  // ── Banner status line ────────────────────────────────────────────────────
+  // "What Devin is doing right now": the sink's statusMessage (the human text
+  // Devin shows at the bottom of its page, e.g. "Devin is thinking..."),
+  // falling back to the coarser statusEnum ("working") or lifecycle status
+  // ("running") when no message was captured. Rendered as a small dimmed row
+  // just above the reply input.
+  function bannerStatus() {
+    if (!streamSummary) return null;
+    const t = streamSummary.statusMessage || streamSummary.statusEnum ||
+      streamSummary.status;
+    return t ? String(t).trim() : null;
+  }
+
+  // Create-or-update the status row IN PLACE on an existing banner. Called
+  // unconditionally from updateBanner before the rebuild guards, so the
+  // status stays live even while a rebuild is deferred (reply input focused
+  // or holding a draft) -- same in-place philosophy as applyMsgExpansion.
+  function patchStatusRow(banner, text, awaiting) {
+    let row = banner.querySelector("#wc-banner-status");
+    if (!text) {
+      if (row) row.remove();
+      return;
+    }
+    if (!row) {
+      row = document.createElement("div");
+      row.id = "wc-banner-status";
+      const dot = document.createElement("span");
+      dot.id = "wc-banner-status-dot";
+      dot.textContent = "●";
+      const txt = document.createElement("span");
+      txt.id = "wc-banner-status-text";
+      row.appendChild(dot);
+      row.appendChild(txt);
+      // Sits above the reply input (the banner's last child).
+      const reply = banner.querySelector("#wc-banner-reply");
+      banner.insertBefore(row, reply || null);
+    }
+    row.classList.toggle("wc-status-awaiting", !!awaiting);
+    const txtEl = row.querySelector("#wc-banner-status-text");
+    if (txtEl.textContent !== text) txtEl.textContent = text;
   }
 
   // ── Banner reply input ────────────────────────────────────────────────────
@@ -711,7 +773,12 @@
       "wc-msg-expanded-mode",
       expandedMsgIdx >= 0 && expandedMsgIdx < rows.length);
     rows.forEach((row, idx) => {
-      row.classList.toggle("wc-msg-expanded", idx === expandedMsgIdx);
+      const expanded = idx === expandedMsgIdx;
+      row.classList.toggle("wc-msg-expanded", expanded);
+      // Per-row line budget (set at build time in row.dataset.wcClamp) as an
+      // INLINE style so it beats any stale injected stylesheet in long-lived
+      // tabs; cleared while expanded so the full text shows.
+      row.style.webkitLineClamp = expanded ? "" : (row.dataset.wcClamp || "");
     });
   }
 
@@ -725,14 +792,23 @@
       (streamSummary && streamSummary.symbol) || currentSymbol();
     const prs = collectPRs();
     const messages = bannerMessages();
+    const statusText = bannerStatus();
+    const statusAwaiting = !!(streamSummary && streamSummary.awaiting);
     // The expanded row is an index into `messages`; if the list shrank (or
     // vanished) since it was expanded, drop back to the normal view.
     if (expandedMsgIdx >= messages.length) expandedMsgIdx = -1;
+    // Status is appended LAST so the expansion click handler's key-patching
+    // regex (anchored at the front) keeps working.
     const state =
       (bannerHidden ? "H|" : "S|") + expandedMsgIdx + "|" +
       symbol + "|" + title + "|" + [...prs.keys()].join(",") + "|" +
-      messages.map((m) => m[0] + m[1]).join("|");
+      messages.map((m) => m[0] + m[1]).join("|") + "|" +
+      (statusAwaiting ? "A" : "-") + (statusText || "");
     let banner = document.getElementById("wc-banner");
+    // The status line updates IN PLACE on every pass (cheap text patch), so
+    // it stays near-realtime even when the full rebuild below is skipped
+    // (unchanged state) or deferred (reply input focused / holding a draft).
+    if (banner) patchStatusRow(banner, statusText, statusAwaiting);
     if (banner && state === lastBannerState) return;
     // Never tear the banner down out from under an in-use reply input: a
     // rebuild would re-attach the same node (value survives) but still steal
@@ -821,6 +897,9 @@
         const row = document.createElement("div");
         row.className = "wc-banner-msg";
         row.title = "Click to expand/collapse this message";
+        // 15-line budget across rows, biggest clamp on the newest message;
+        // applyMsgExpansion applies it inline (and lifts it while expanded).
+        row.dataset.wcClamp = String(msgLineClamp(idx, messages.length));
         renderMsgText(row, icon + " " + text);
         row.addEventListener("click", (e) => {
           // Links inside rows must still navigate, not toggle expansion.
@@ -844,6 +923,11 @@
     // Reply input: always the SAME node (see getReplyInput), re-attached to
     // each rebuilt banner so any typed-but-unsent text is never discarded.
     banner.appendChild(getReplyInput());
+
+    // Status line ("what Devin is doing right now"), just above the reply
+    // input. patchStatusRow inserts before #wc-banner-reply, so the input
+    // must already be attached.
+    patchStatusRow(banner, statusText, statusAwaiting);
 
     document.documentElement.appendChild(banner);
   }
@@ -1074,17 +1158,28 @@
     tick();
   }, RENDER_INTERVAL_MS);
   const onVisible = () => {
-    if (!document.hidden) tick();
+    if (document.hidden) return;
+    tick();
+    refreshStreamSummary(); // snap the status line current on tab switch
   };
   document.addEventListener("visibilitychange", onVisible);
   const hbTimer = setInterval(() => {
     heartbeat();
     refreshStreamSummary();
   }, HEARTBEAT_INTERVAL_MS);
+  // Fast summary path for the tab the user is LOOKING at: visible Devin tabs
+  // re-request the (background-cached) sink summary every 8s so the status
+  // line tracks Devin in near-realtime. Hidden tabs skip this entirely and
+  // stay on the 30s heartbeat cadence above.
+  const fastSummaryTimer = setInterval(() => {
+    if (document.hidden || !isDevinSession()) return;
+    refreshStreamSummary();
+  }, SUMMARY_FAST_INTERVAL_MS);
 
   window.__wcCleanup = function () {
     clearInterval(tickTimer);
     clearInterval(hbTimer);
+    clearInterval(fastSummaryTimer);
     document.removeEventListener("visibilitychange", onVisible);
     try { chrome.storage.onChanged.removeListener(onStorageChanged); } catch (e) {}
     for (const id of ["wc-badge", "wc-banner", "wc-await-border",

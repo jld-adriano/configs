@@ -101,6 +101,7 @@
 #wc-banner.wc-collapsed #wc-banner-title-text,
 #wc-banner.wc-collapsed #wc-banner-prs,
 #wc-banner.wc-collapsed #wc-banner-msgs,
+#wc-banner.wc-collapsed #wc-banner-status,
 #wc-banner.wc-collapsed #wc-banner-reply {
   display: none;
 }
@@ -148,7 +149,7 @@
   opacity: 1;
 }
 
-/* Recent chat messages (from the devin-stream summary; last 4 back-and-forth
+/* Recent chat messages (from the devin-stream summary; last 6 back-and-forth
    human/agent messages), shown below the PR list behind a separator line */
 #wc-banner-msgs {
   /* 5px separator with 10px of space above and below it */
@@ -164,7 +165,9 @@
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   line-height: 1.3;
   margin-bottom: 4px;
-  /* ellipsize to 5 lines each */
+  /* Fallback clamp only: content.js sets a per-row INLINE clamp, top-heavy
+     toward the newest messages (newest 10 lines, second 3, older rows 1-line
+     crumbs; see MSG_LINE_ALLOC / applyMsgExpansion). */
   display: -webkit-box;
   -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
@@ -200,6 +203,35 @@
   text-decoration: underline;
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   pointer-events: auto;
+}
+
+/* Status line: what Devin is doing right now (sink statusMessage, falling
+   back to statusEnum/status). Small, italic and dimmed; sits just above the
+   reply input. The leading dot picks up the awaiting orange when the session
+   is blocked/suspended. */
+#wc-banner-status {
+  margin-top: 6px;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 500;
+  color: inherit;
+  opacity: 0.8;
+  text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#wc-banner-status-dot {
+  font-style: normal;
+  font-size: 9px;
+  margin-right: 5px;
+  vertical-align: 1px;
+}
+
+#wc-banner-status.wc-status-awaiting #wc-banner-status-dot {
+  color: #ff6a00;
 }
 
 /* Reply input at the bottom of the banner: forwards text into the page's

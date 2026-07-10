@@ -29,7 +29,9 @@ events.jsonl on first start):
                           prs: [{number,title,url,state,merged,
                           draft}], lastHumanMessage, lastAgentMessage,
                           recentMessages: [{role: "human"|"agent", text, ts}]
-                          (last 4 chat messages, oldest -> newest), lastSeen,
+                          (last 6 chat messages, oldest -> newest; the latest
+                          HUMAN message is always represented -- see
+                          _ensure_human_recent), lastSeen,
                           decidedTitle, symbol, symbolShortcode, decidedAt}
 
 On top of THAT, an optional LLM enrichment thread asks OpenAI (model
@@ -160,9 +162,12 @@ def _write_latest():
 
 MSG_TRUNC = 300
 # recentMessages: the last few chat messages (transcript tail) kept per
-# session, oldest -> newest, with a larger per-message truncation.
-RECENT_MSGS = 4
-RECENT_TRUNC = 600
+# session, oldest -> newest, with a larger per-message truncation. 3000 chars
+# lets the banner's click-to-expand show essentially whole messages (600 was
+# ~7 lines at 12px); 6 msgs x 3KB x hundreds of sessions keeps /summary at a
+# few MB worst case, fine for a local endpoint.
+RECENT_MSGS = 6
+RECENT_TRUNC = 3000
 # "initial_user_message" is deliberately NOT a lastHumanMessage source: it is
 # by definition the session's FIRST message, so it only serves as a fallback
 # when no real user_message was ever captured (see _note_message).
@@ -297,6 +302,30 @@ def _note_recent(summ, role, text, ts):
     recent.append({"role": role, "text": _trunc_msg(text, RECENT_TRUNC), "ts": ts})
     recent.sort(key=lambda m: _epoch(m["ts"]))
     del recent[:-RECENT_MSGS]
+    _ensure_human_recent(summ)
+
+
+def _ensure_human_recent(summ):
+    """Guarantee the latest HUMAN message is represented in recentMessages.
+
+    Long agent monologues (tool loops, multi-part answers) can push every
+    human turn out of the last-RECENT_MSGS window, leaving the banner
+    transcript with no trace of what the user asked. When that happens,
+    replace the OLDEST retained message with the session's latest human
+    message (tracked separately as lastHumanMessage/-At) and re-sort, so the
+    list stays chronological. Skipped when the human message has no
+    timestamp (can't be ordered) or the window isn't full yet (the human
+    message would have been retained if it were among the last few anyway).
+    """
+    recent = summ["recentMessages"]
+    if any(m["role"] == "human" for m in recent):
+        return
+    text, ts = summ.get("lastHumanMessage"), summ.get("lastHumanMessageAt")
+    if not text or not ts or len(recent) < RECENT_MSGS:
+        return
+    del recent[0]
+    recent.append({"role": "human", "text": text, "ts": ts})
+    recent.sort(key=lambda m: _epoch(m["ts"]))
 
 
 def _derive_awaiting(summ):
