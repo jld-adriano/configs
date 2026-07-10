@@ -868,7 +868,7 @@
       e.stopPropagation();
       bannerHidden = !bannerHidden;
       updateBanner();
-      updateAwaitBorder(); // re-anchor the awaiting line to the rebuilt banner
+      updateAwaitBorder(); // re-sync the banner offset below the awaiting line
     });
     titleRow.appendChild(hide);
 
@@ -930,6 +930,9 @@
     patchStatusRow(banner, statusText, statusAwaiting);
 
     document.documentElement.appendChild(banner);
+    // Fresh banner nodes start at top:0; push it below the awaiting line if
+    // one is currently showing.
+    syncBannerOffset();
   }
 
   // ── "Awaiting instructions" border ──────────────────────────────────────
@@ -1043,17 +1046,32 @@
   let awaitMissCount = 0;
   let lastAwaiting = null; // stabilized state
 
-  // Shared visuals for both placements. Inline so it wins over any stale
-  // injected stylesheet: long-lived tabs keep the style.css they loaded with
-  // and that copy wins the cascade over re-injected CSS. The gradient is
-  // deliberately STATIC (animation:none, explicit to beat stale stylesheets
-  // that still carry the old wc-await-sweep animation): dozens of these bars
-  // animating across visible windows kept the compositor permanently busy.
+  // Line visuals, duplicated inline so they win over any stale injected
+  // stylesheet: long-lived tabs keep the style.css they loaded with and that
+  // copy wins the cascade over re-injected CSS. The gradient is deliberately
+  // STATIC (animation:none, explicit to beat stale stylesheets that still
+  // carry the old wc-await-sweep animation): dozens of these bars animating
+  // across visible windows kept the compositor permanently busy.
   const AWAIT_LINE_BASE_CSS =
     "height:" + AWAIT_LINE_PX + "px;border:0;" +
     "background:linear-gradient(90deg,#ff6a00,#ffd27a,#ff6a00);" +
     "background-size:200% 100%;box-sizing:border-box;pointer-events:none;" +
     "animation:none;";
+
+  // Keep the banner just below the awaiting line: banner top = line height
+  // while the line is present, 0 otherwise. Applied INLINE so it wins over
+  // stale stylesheets, and re-applied whenever the awaiting state flips
+  // (updateAwaitBorder) or the banner is rebuilt (updateBanner) -- the
+  // rebuilt node starts without the inline offset. Awaiting is sink-driven
+  // and debounced, so flips (and thus layout shifts) are infrequent.
+  function syncBannerOffset() {
+    const banner = document.getElementById("wc-banner");
+    if (!banner) return;
+    const top = document.getElementById("wc-await-border")
+      ? AWAIT_LINE_PX + "px"
+      : "0px";
+    if (banner.style.top !== top) banner.style.top = top;
+  }
 
   function updateAwaitBorder() {
     let border = document.getElementById("wc-await-border");
@@ -1068,17 +1086,17 @@
     lastAwaiting = awaiting;
     if (!awaiting) {
       if (border) border.remove();
+      syncBannerOffset();
       return;
     }
-    // When a banner exists the line attaches to its bottom edge (in-flow last
-    // child; negative margins cancel the banner padding so it spans the full
-    // banner width). The banner stays fixed at top:0 and never shifts -- it
-    // only extends downward while awaiting. Bannerless pages (Capy, other
-    // chats) keep the viewport-top line. If the banner was just (re)created
-    // or removed, re-parent by rebuilding.
-    const banner = document.getElementById("wc-banner");
-    const wantParent = banner || document.documentElement;
-    if (border && border.parentNode !== wantParent) {
+    // The line is pinned across the very top of the viewport on ALL pages
+    // (Devin and Capy alike): with a 2-row tiled window grid the awaiting
+    // state must be visible at each window's top edge, which beats the old
+    // no-layout-shift preference (banner-bottom attachment). The Devin
+    // banner shifts down by the line height while the line is present
+    // (syncBannerOffset) so the two never overlap.
+    if (border && border.parentNode !== document.documentElement) {
+      // An older build parented the line inside the banner; rebuild it.
       border.remove();
       border = null;
     }
@@ -1086,13 +1104,12 @@
       border = document.createElement("div");
       border.id = "wc-await-border";
       border.setAttribute("aria-hidden", "true");
-      border.style.cssText = banner
-        ? "position:static;display:block;margin:5px -12px -5px;" +
-          AWAIT_LINE_BASE_CSS
-        : "position:fixed;left:0;right:0;top:0;bottom:auto;z-index:2147483647;" +
-          AWAIT_LINE_BASE_CSS;
-      wantParent.appendChild(border);
+      border.style.cssText =
+        "position:fixed;left:0;right:0;top:0;bottom:auto;z-index:2147483647;" +
+        AWAIT_LINE_BASE_CSS;
+      document.documentElement.appendChild(border);
     }
+    syncBannerOffset();
   }
 
   function tick() {

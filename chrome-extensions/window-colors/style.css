@@ -93,7 +93,8 @@
 
 /* Collapsed banner (per-tab): shrink to a minimal strip showing only the
    symbol + the two title-row icons. The title text, PR list and message rows
-   are hidden; the awaiting line still attaches to the banner's bottom edge. */
+   are hidden; the viewport-top awaiting line and banner offset are
+   unaffected. */
 #wc-banner.wc-collapsed {
   padding: 2px 6px 3px;
 }
@@ -296,11 +297,12 @@
 
 /* Awaiting instructions: a STATIC gradient line (deliberately not animated:
    dozens of visible awaiting bars sweeping at once kept the compositor
-   permanently busy). With a banner present it is appended INSIDE the banner
-   as its last child (attached to the bottom edge; the banner never shifts,
-   it just extends downward); on bannerless pages it stays pinned across the
-   top of the viewport. Geometry is duplicated inline on the element to beat
-   stale stylesheets in long-lived tabs. */
+   permanently busy). Pinned across the VERY TOP of the viewport on all pages
+   (Devin and Capy alike) so the awaiting state reads at each window's top
+   edge in a tiled grid; the Devin banner shifts down by the line height
+   while the line is present (content.js syncBannerOffset) so they never
+   overlap. Geometry is duplicated inline on the element to beat stale
+   stylesheets in long-lived tabs. */
 #wc-await-border {
   position: fixed;
   /* inset/border set explicitly to beat the stale bottom-line rule that
