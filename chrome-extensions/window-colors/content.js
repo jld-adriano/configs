@@ -554,6 +554,7 @@
     if (!row) {
       row = document.createElement("div");
       row.id = "wc-banner-status";
+      row.style.flex = "0 0 auto"; // banner is a flex column; never shrink
       const dot = document.createElement("span");
       dot.id = "wc-banner-status-dot";
       dot.textContent = "●";
@@ -588,6 +589,9 @@
     replyInput.placeholder = "reply to Devin…";
     replyInput.autocomplete = "off";
     replyInput.spellcheck = false;
+    // Banner is a flex column with a viewport max-height; the input must
+    // stay reachable, so it never shrinks (only the message list does).
+    replyInput.style.flex = "0 0 auto";
     replyInput.addEventListener("keydown", (e) => {
       // Keep banner keystrokes away from the page's global hotkey handlers.
       e.stopPropagation();
@@ -769,9 +773,19 @@
     banner = banner || document.getElementById("wc-banner");
     if (!banner) return;
     const rows = banner.querySelectorAll(".wc-banner-msg");
-    banner.classList.toggle(
-      "wc-msg-expanded-mode",
-      expandedMsgIdx >= 0 && expandedMsgIdx < rows.length);
+    const expandedMode = expandedMsgIdx >= 0 && expandedMsgIdx < rows.length;
+    banner.classList.toggle("wc-msg-expanded-mode", expandedMode);
+    // Single scrollbar either way (inline, beats stale stylesheets): the
+    // messages container scrolls the clamped transcript normally, but while
+    // a row is expanded the ROW scrolls (max-height 40vh + overflow) and the
+    // container just sizes it -- otherwise the two scroll regions would
+    // double-clip each other.
+    const msgs = banner.querySelector("#wc-banner-msgs");
+    if (msgs) {
+      msgs.style.overflowY = expandedMode ? "hidden" : "auto";
+      msgs.style.display = expandedMode ? "flex" : "";
+      msgs.style.flexDirection = expandedMode ? "column" : "";
+    }
     rows.forEach((row, idx) => {
       const expanded = idx === expandedMsgIdx;
       row.classList.toggle("wc-msg-expanded", expanded);
@@ -779,6 +793,10 @@
       // INLINE style so it beats any stale injected stylesheet in long-lived
       // tabs; cleared while expanded so the full text shows.
       row.style.webkitLineClamp = expanded ? "" : (row.dataset.wcClamp || "");
+      // Expanded row fills the (now non-scrolling) container and scrolls
+      // itself; min-height:0 lets it shrink below 40vh in short windows.
+      row.style.flex = expanded ? "1 1 auto" : "";
+      row.style.minHeight = expanded ? "0" : "";
     });
   }
 
@@ -827,9 +845,18 @@
     banner.classList.toggle("wc-collapsed", bannerHidden);
     banner.style.backgroundColor = currentColor();
     applyBannerContrast(banner, currentColor());
+    // Flex column (inline, so it beats stale injected stylesheets): together
+    // with the max-height set in syncBannerOffset, only the message list
+    // (flex:1 1 auto, min-height:0, overflow-y:auto) shrinks and scrolls
+    // when the window is short. Everything else is flex:0 0 auto so the
+    // title row (with the ⓘ/▾ toggles) and the reply input never get
+    // pushed off the bottom of the viewport.
+    banner.style.display = "flex";
+    banner.style.flexDirection = "column";
 
     const titleRow = document.createElement("div");
     titleRow.id = "wc-banner-title";
+    titleRow.style.flex = "0 0 auto"; // must never shrink off-screen
     const sym = document.createElement("span");
     sym.id = "wc-banner-symbol";
     sym.textContent = symbol;
@@ -875,6 +902,7 @@
     if (prs.size) {
       const prRow = document.createElement("div");
       prRow.id = "wc-banner-prs";
+      prRow.style.flex = "0 0 auto";
       for (const [href, label] of prs) {
         const a = document.createElement("a");
         a.href = href;
@@ -893,6 +921,17 @@
     if (messages.length) {
       const msgs = document.createElement("div");
       msgs.id = "wc-banner-msgs";
+      // The ONE flex child allowed to shrink: when the height cap bites,
+      // the transcript scrolls between the (pinned) title row and reply
+      // input instead of pushing them off-screen. min-height:0 lets a flex
+      // item actually shrink below its content size; pointer-events:auto is
+      // needed because the banner root is pointer-events:none and a
+      // scrollable container must receive wheel events itself. Inline so it
+      // beats stale injected stylesheets in long-lived tabs.
+      msgs.style.flex = "1 1 auto";
+      msgs.style.minHeight = "0";
+      msgs.style.overflowY = "auto";
+      msgs.style.pointerEvents = "auto";
       messages.forEach(([icon, text], idx) => {
         const row = document.createElement("div");
         row.className = "wc-banner-msg";
@@ -1067,10 +1106,20 @@
   function syncBannerOffset() {
     const banner = document.getElementById("wc-banner");
     if (!banner) return;
-    const top = document.getElementById("wc-await-border")
-      ? AWAIT_LINE_PX + "px"
-      : "0px";
+    const topPx = document.getElementById("wc-await-border")
+      ? AWAIT_LINE_PX
+      : 0;
+    const top = topPx + "px";
     if (banner.style.top !== top) banner.style.top = top;
+    // Mirror the offset into a viewport height cap so the banner can never
+    // run off the bottom of the window (worst case: many PRs + 6 message
+    // rows in a short tiled window pushed the collapse toggle and reply
+    // input off-screen). calc(100vh - ...) tracks window resizes for free.
+    // The banner is a flex column where ONLY the message list shrinks and
+    // scrolls (see updateBanner + style.css), so the title row's ⓘ/▾
+    // toggles and the reply input always stay reachable.
+    const maxH = "calc(100vh - " + (topPx + 8) + "px)";
+    if (banner.style.maxHeight !== maxH) banner.style.maxHeight = maxH;
   }
 
   function updateAwaitBorder() {

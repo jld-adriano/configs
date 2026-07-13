@@ -24,6 +24,15 @@
   left: 0;
   right: auto;
   max-width: 1200px;
+  /* Never taller than the viewport: content.js (syncBannerOffset) refines
+     this inline to calc(100vh - <awaiting-line top offset> - 8px). The
+     banner is a flex column in which ONLY the message list shrinks and
+     scrolls, so the title row (with the ⓘ/▾ toggles) and the reply input
+     stay on-screen even in short tiled windows. */
+  max-height: calc(100vh - 8px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   border-bottom-right-radius: 10px;
   z-index: 2147483647;
   pointer-events: none;
@@ -38,6 +47,7 @@
 }
 
 #wc-banner-title {
+  flex: 0 0 auto; /* the collapse/debug toggles must never leave the screen */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -157,6 +167,15 @@
   margin-top: 10px;
   padding-top: 10px;
   border-top: 5px solid var(--wc-separator, rgba(255, 255, 255, 0.35));
+  /* The one flex child that shrinks when the banner hits its viewport
+     max-height: the transcript scrolls between the pinned title row and
+     reply input. min-height:0 lets the flex item shrink below content size;
+     pointer-events:auto so the scroll container gets wheel events (the
+     banner root is pointer-events:none). */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  pointer-events: auto;
 }
 
 .wc-banner-msg {
@@ -195,6 +214,21 @@
   display: none;
 }
 
+/* While a row is expanded, exactly ONE scrollbar: the row's. The messages
+   container stops scrolling and instead sizes the row (flex column +
+   min-height:0), so the row's own 40vh/overflow scroll region is never
+   double-clipped by a scrolling parent. */
+#wc-banner.wc-msg-expanded-mode #wc-banner-msgs {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+
+.wc-banner-msg.wc-msg-expanded {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* Links parsed out of message text: short clickable labels, styled like the
    PR links. The banner is pointer-events:none, so re-enable on the anchors. */
 .wc-banner-msg a {
@@ -211,6 +245,7 @@
    reply input. The leading dot picks up the awaiting orange when the session
    is blocked/suspended. */
 #wc-banner-status {
+  flex: 0 0 auto;
   margin-top: 6px;
   font-size: 11px;
   font-style: italic;
@@ -239,6 +274,7 @@
    real chat composer on Enter. The banner is pointer-events:none, so the
    input opts back in. Subtle glassy styling that inherits banner contrast. */
 #wc-banner-reply {
+  flex: 0 0 auto; /* stays reachable; only the message list shrinks */
   display: block;
   width: 100%;
   box-sizing: border-box;
@@ -272,6 +308,7 @@
 }
 
 #wc-banner-prs {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
