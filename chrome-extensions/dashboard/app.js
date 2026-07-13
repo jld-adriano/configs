@@ -338,6 +338,13 @@ function renderCard(s) {
   );
   if (s.tabCount > 1) meta.push(`<span>${s.tabCount} tabs</span>`);
   if (mem) meta.push(`<span title="JS heap">▦ ${esc(mem)}</span>`);
+  // Session cost from captured billing data (devin-stream summary); only
+  // sessions whose tabs captured a billing request carry it.
+  if (s.summary && typeof s.summary.costUsd === "number") {
+    meta.push(`<span title="session usage (captured billing data)">$${esc(s.summary.costUsd.toFixed(2))}</span>`);
+  } else if (s.summary && typeof s.summary.acuUsed === "number") {
+    meta.push(`<span title="session usage (captured billing data)">${esc(s.summary.acuUsed)} ACU</span>`);
+  }
   if (s.workspace != null) meta.push(`<span>ws ${esc(s.workspace)}</span>`);
   meta.push(`<span class="badge badge-kind">${esc(s.kind)}</span>`);
 

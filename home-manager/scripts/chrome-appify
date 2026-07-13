@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Convert the focused Chrome window into an app-mode window (chrome-appify).
+
+App-mode windows (`--app=<url>`) render with only the native macOS title bar
+(~28px): no tab strip, no address bar. On a 2-row tiled grid of Devin/Capy
+windows that reclaims ~50-80px of vertical space per window. Verified
+empirically (2026-07-13, Chrome 150):
+  - content scripts still inject (window-colors HUD works, reports reach the
+    :48291 sink),
+  - AeroSpace tiles app windows like any other window,
+  - the window title is the page title, so aero-layout-lock's title matching
+    still works (note: app-window titles DROP the " - Google Chrome" suffix,
+    e.g. "Example Domain - Adriano (exa.ai)"),
+  - the app window shares the profile (cookies/auth carry, Devin stays
+    logged in).
+
+Flow: read the focused window's active tab URL via AppleScript, open an
+app-mode window for it (same profile), wait for the new window to exist,
+close the ORIGINAL tab (or window, if that tab was its only one), and report
+which workspace AeroSpace placed the new window on.
+
+Known app-mode trade-offs: no omnibox (navigation is in-page only), no tab
+strip (the window is pinned to one "tab"), and cmd-T opens a tab in a regular
+window instead. Fine for single-purpose Devin/Capy session windows.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+CHROME_DIR = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+APPEAR_TIMEOUT = 25   # seconds to wait for the new app window
+POLL_INTERVAL = 0.5
+
+# One line per window: <window-id>|||<active-tab url>|||<tab count>
+DUMP_WINDOWS_APPLESCRIPT = (
+    'tell application "Google Chrome"\n'
+    '  set out to ""\n'
+    '  repeat with w in windows\n'
+    '    set u to ""\n'
+    '    try\n'
+    '      set u to URL of active tab of w\n'
+    '    end try\n'
+    '    set out to out & (id of w) & "|||" & u & "|||" '
+    '& (count of tabs of w) & linefeed\n'
+    '  end repeat\n'
+    '  return out\n'
+    'end tell'
+)
+
+
+def osascript(script, timeout=30):
+    res = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip() or "osascript failed")
+    return res.stdout.strip()
+
+
+def aero(args, timeout=30):
+    return subprocess.run(
+        ["aerospace"] + args, capture_output=True, text=True, timeout=timeout,
+    ).stdout.strip()
+
+
+def notify(msg):
+    try:
+        subprocess.run(
+            ["osascript", "-e",
+             f'display notification "{msg}" with title "Chrome Appify"'],
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def fail(msg):
+    print(f"ERROR: {msg}")
+    notify(f"❌ {msg}")
+    sys.exit(1)
+
+
+def chrome_windows():
+    """[{id, url, tabs}] for every Chrome window, via AppleScript."""
+    out = []
+    for line in osascript(DUMP_WINDOWS_APPLESCRIPT).split("\n"):
+        parts = line.split("|||")
+        if len(parts) != 3:
+            continue
+        try:
+            out.append({"id": int(parts[0]),
+                        "url": parts[1],
+                        "tabs": int(parts[2])})
+        except ValueError:
+            continue
+    return out
+
+
+def focused_window():
+    """The AeroSpace-focused window (must be Chrome), as {wid, title}."""
+    line = aero(["list-windows", "--focused", "--format",
+                 "%{window-id}|%{app-name}|%{window-title}"])
+    parts = line.split("|", 2)
+    if len(parts) < 3:
+        fail("couldn't read the focused window from AeroSpace")
+    if parts[1].strip() != "Google Chrome":
+        fail(f"focused window is {parts[1].strip()!r}, not Chrome")
+    return {"wid": int(parts[0].strip()), "title": parts[2].strip()}
+
+
+def profile_directory_for(window_title):
+    """Map the focused window's profile suffix to a --profile-directory.
+
+    Chrome (with multiple profiles) suffixes window titles with the profile
+    display name, e.g. "... - Google Chrome - Adriano (exa.ai)". Local
+    State's profile.info_cache maps directory -> names; if exactly one
+    profile's display-name forms match the title suffix, pin the app window
+    to that profile. Otherwise return None and rely on Chrome's last-active-
+    profile default (correct in practice: the user is IN that profile).
+    """
+    try:
+        with open(os.path.join(CHROME_DIR, "Local State")) as f:
+            cache = json.load(f)["profile"]["info_cache"]
+    except Exception:
+        return None
+    matches = set()
+    for directory, info in cache.items():
+        name = (info.get("name") or "").strip()
+        gaia = (info.get("gaia_name") or "").strip()
+        forms = {name, gaia, f"{gaia} ({name})", f"{name} ({gaia})"}
+        for form in forms:
+            if form and window_title.endswith(f" - {form}"):
+                matches.add(directory)
+    return matches.pop() if len(matches) == 1 else None
+
+
+def main():
+    focused = focused_window()
+
+    # The AeroSpace-focused window is the OS-frontmost, so Chrome's "front
+    # window" is the same window; read its active tab directly.
+    try:
+        url = osascript(
+            'tell application "Google Chrome" to '
+            'get URL of active tab of front window')
+        tab_title = osascript(
+            'tell application "Google Chrome" to '
+            'get title of active tab of front window')
+        orig_id = int(osascript(
+            'tell application "Google Chrome" to get id of front window'))
+    except Exception as e:
+        fail(f"couldn't read the focused Chrome window's tab: {e}")
+
+    if not url.startswith(("http://", "https://")):
+        fail(f"active tab URL isn't appifiable: {url[:80]}")
+
+    before = {w["id"]: w for w in chrome_windows()}
+    if orig_id not in before:
+        fail("focused window vanished before conversion")
+    orig_tabs = before[orig_id]["tabs"]
+
+    print(f"Converting window {focused['wid']} "
+          f"({tab_title[:60]!r}, {orig_tabs} tab(s)) -> app mode")
+    cmd = ["open", "-na", "Google Chrome", "--args"]
+    profile_dir = profile_directory_for(focused["title"])
+    if profile_dir:
+        cmd.append(f"--profile-directory={profile_dir}")
+    cmd.append(f"--app={url}")
+    subprocess.run(cmd, timeout=30, check=True)
+
+    # Wait for the new single-tab window to exist before touching the
+    # original. Don't require the URL to match exactly: SPAs redirect and
+    # the tab can sit on about:blank for a beat.
+    new_id = None
+    deadline = time.time() + APPEAR_TIMEOUT
+    while time.time() < deadline:
+        for w in chrome_windows():
+            if w["id"] not in before and w["tabs"] == 1:
+                new_id = w["id"]
+                break
+        if new_id is not None:
+            break
+        time.sleep(POLL_INTERVAL)
+    if new_id is None:
+        fail("app window never appeared; original window left untouched")
+
+    # Close the original: the whole window if that tab was its only one,
+    # otherwise just the converted tab (leave the rest of the window alone).
+    if orig_tabs <= 1:
+        osascript(
+            'tell application "Google Chrome" to '
+            f'close (first window whose id is {orig_id})')
+    else:
+        quoted = url.replace("\\", "\\\\").replace('"', '\\"')
+        osascript(
+            'tell application "Google Chrome"\n'
+            f'  set w to (first window whose id is {orig_id})\n'
+            '  repeat with t in (tabs of w)\n'
+            f'    if (URL of t) is "{quoted}" then\n'
+            '      close t\n'
+            '      exit repeat\n'
+            '    end if\n'
+            '  end repeat\n'
+            'end tell')
+
+    # Report where AeroSpace placed the new window. App windows drop the
+    # " - Google Chrome" title suffix, which is how we tell it apart from
+    # regular windows showing the same page title.
+    placement = "unknown workspace"
+    time.sleep(1)
+    for line in aero(["list-windows", "--all", "--format",
+                      "%{window-id}|%{workspace}|%{app-name}|%{window-title}"],
+                     timeout=120).splitlines():
+        parts = line.split("|", 3)
+        if len(parts) < 4 or parts[2].strip() != "Google Chrome":
+            continue
+        title = parts[3].strip()
+        if title.startswith(tab_title[:40]) and " - Google Chrome" not in title:
+            placement = (f"workspace {parts[1].strip()} "
+                         f"(window {parts[0].strip()})")
+            break
+
+    msg = f"App window for {tab_title[:50]!r} placed on {placement}"
+    print(msg)
+    notify(f"✅ {msg}")
+
+
+if __name__ == "__main__":
+    main()

@@ -23,7 +23,9 @@
   top: 0;
   left: 0;
   right: auto;
-  max-width: 1200px;
+  /* Never wider than the window: 1200px on big screens, viewport minus a
+     margin in narrow tiled windows. */
+  max-width: min(1200px, calc(100vw - 16px));
   /* Never taller than the viewport: content.js (syncBannerOffset) refines
      this inline to calc(100vh - <awaiting-line top offset> - 8px). The
      banner is a flex column in which ONLY the message list shrinks and
@@ -31,12 +33,17 @@
      stay on-screen even in short tiled windows. */
   max-height: calc(100vh - 8px);
   box-sizing: border-box;
+  /* The max-width/max-height caps are hard limits: anything that still
+     doesn't fit is clipped rather than spilling over the page (children
+     wrap/scroll internally, so clipping only bites in degenerate windows). */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   border-bottom-right-radius: 10px;
   z-index: 2147483647;
   pointer-events: none;
-  padding: 4px 12px 5px;
+  /* compact: minimal chrome around the content (fonts untouched) */
+  padding: 2px 8px 3px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   /* Contrast defaults (white-on-dark); content.js overrides the element's
@@ -50,7 +57,7 @@
   flex: 0 0 auto; /* the collapse/debug toggles must never leave the screen */
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   font-size: 15px;
   font-weight: 700;
   color: inherit;
@@ -58,18 +65,34 @@
 }
 
 #wc-banner-title-text {
-  /* wrap long titles onto a second line, then ellipsize */
+  /* wrap long titles onto a second line, then ellipsize; break unbroken
+     runs (URLs, ids) so the title can never widen past the banner */
   flex: 1;
+  min-width: 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   line-height: 1.2;
 }
 
 #wc-banner-symbol {
   font-size: 18px;
   line-height: 1;
+}
+
+/* Session cost (captured billing data): small dimmed figure in the title
+   row, next to the ⓘ/collapse icons. Only present when the sink has billing
+   data for this session. */
+#wc-banner-cost {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.65;
+  white-space: nowrap;
+  align-self: flex-start;
 }
 
 /* Debug affordance: tiny info icon in the title row + full-data overlay */
@@ -110,6 +133,7 @@
 }
 
 #wc-banner.wc-collapsed #wc-banner-title-text,
+#wc-banner.wc-collapsed #wc-banner-cost,
 #wc-banner.wc-collapsed #wc-banner-prs,
 #wc-banner.wc-collapsed #wc-banner-msgs,
 #wc-banner.wc-collapsed #wc-banner-status,
@@ -125,7 +149,8 @@
   position: fixed;
   top: 40px;
   left: 12px;
-  max-width: 640px;
+  /* viewport-capped: narrow tiled windows can be under 640px wide */
+  max-width: min(640px, calc(100vw - 24px));
   max-height: 70vh;
   overflow: auto;
   background: rgba(20, 20, 20, 0.96);
@@ -163,10 +188,10 @@
 /* Recent chat messages (from the devin-stream summary; last 6 back-and-forth
    human/agent messages), shown below the PR list behind a separator line */
 #wc-banner-msgs {
-  /* 5px separator with 10px of space above and below it */
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 5px solid var(--wc-separator, rgba(255, 255, 255, 0.35));
+  /* thin separator with a little breathing room (was 10+5+10 = 25px tall) */
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 2px solid var(--wc-separator, rgba(255, 255, 255, 0.35));
   /* The one flex child that shrinks when the banner hits its viewport
      max-height: the transcript scrolls between the pinned title row and
      reply input. min-height:0 lets the flex item shrink below content size;
@@ -184,7 +209,10 @@
   color: inherit;
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   line-height: 1.3;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
+  /* long unbroken tokens (URLs, hashes) must wrap, never widen the banner */
+  overflow-wrap: anywhere;
+  word-break: break-word;
   /* Fallback clamp only: content.js sets a per-row INLINE clamp, top-heavy
      toward the newest messages (newest 10 lines, second 3, older rows 1-line
      crumbs; see MSG_LINE_ALLOC / applyMsgExpansion). */
@@ -205,7 +233,10 @@
 .wc-banner-msg.wc-msg-expanded {
   display: block;
   -webkit-line-clamp: unset;
-  max-height: 40vh;
+  /* Viewport-aware: 40vh normally, but never more than the viewport minus
+     the banner's fixed rows (title + status + reply input + awaiting line),
+     so expanding a message can't push the input off a short window. */
+  max-height: min(40vh, calc(100vh - 120px));
   overflow-y: auto;
 }
 
@@ -246,7 +277,7 @@
    is blocked/suspended. */
 #wc-banner-status {
   flex: 0 0 auto;
-  margin-top: 6px;
+  margin-top: 3px;
   font-size: 11px;
   font-style: italic;
   font-weight: 500;
@@ -278,8 +309,8 @@
   display: block;
   width: 100%;
   box-sizing: border-box;
-  margin-top: 6px;
-  padding: 3px 8px;
+  margin-top: 4px;
+  padding: 2px 8px;
   font-family: inherit;
   font-size: 12px;
   font-weight: 500;
@@ -314,22 +345,29 @@
   gap: 4px 12px;
   margin-top: 2px;
   pointer-events: auto;
-  /* cap the PR list at ~3 wrapped rows (row = 9px font * 1.2 + 4px gap) */
+  /* cap the PR list at ~3 wrapped rows (row = 9px font * 1.2 + 4px gap);
+     rows beyond the cap scroll instead of eating the banner's height */
   max-height: 41px;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #wc-banner-prs a {
   line-height: 1.2;
-}
-
-#wc-banner-prs a {
   font-size: 9px;
   font-weight: 600;
   color: inherit;
   text-decoration: underline;
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
+  /* chips stay one line each (the ROW wraps between chips); a single very
+     long PR title ellipsizes at 40ch instead of forcing the banner's
+     intrinsic width past the viewport. Flex items are blockified, so
+     overflow/text-overflow apply; the 100% bound keeps degenerate windows
+     safe. white-space declared explicitly to beat stale stylesheets. */
   white-space: nowrap;
+  max-width: min(40ch, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Awaiting instructions: a STATIC gradient line (deliberately not animated:

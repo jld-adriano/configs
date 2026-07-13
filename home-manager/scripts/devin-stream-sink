@@ -26,6 +26,7 @@ events.jsonl on first start):
 
     summary[sessionId] = {title, rawTitle, status, statusEnum, statusMessage,
                           statusEnumAt, awaiting,
+                          costUsd, acuUsed, costAt,
                           prs: [{number,title,url,state,merged,
                           draft}], lastHumanMessage, lastAgentMessage,
                           recentMessages: [{role: "human"|"agent", text, ts}]
@@ -76,6 +77,14 @@ Payload sources (documented from captured traffic):
   * GET /api/sessions/devin-<id>/prs -> [{pr_url, state, draft,
         github_pr_data:{merged, number, title, ...}}] (bodies truncated at
         24KB by the extension, so this is parsed with regexes)
+  * GET /api/billing/usage/session/devin-<id> -> {acu_used,
+        acu_used_since_last_reset, max_acu_limit, overage_dollars,
+        overage_dollars_since_last_reset}. The per-session dollar figure is
+        overage_dollars (observed: acu_used is always 0 and
+        acu_used_since_last_reset goes negative once the plan's ACUs are
+        exhausted; overage_dollars tracks the session's billed dollars) ->
+        summary costUsd. acu_used is kept as acuUsed only when positive.
+        Only sessions whose tabs captured such a request carry cost data.
   * WS  /api/events/devin-<id>/live -> {type:"devin_event", devin_id,
         event:{type, message, timestamp, ...}}. Chat messages are event types
         devin_message (agent) and user_message/initial_user_message (human);
@@ -201,6 +210,8 @@ _URL_DEVIN_ID = re.compile(r"devin-([0-9a-f]{8,})")
 # WS -- but parsed defensively in case the app grows/changes one).
 _SEND_POST_PATH = re.compile(r"/api/.*(message|send|chat)", re.I)
 _SESSION_API = re.compile(r"/api/sessions/devin-([0-9a-f]+)(/prs)?$")
+# Per-session billing usage (see module docstring for the payload shape).
+_BILLING_API = re.compile(r"/api/billing/usage/session/devin-([0-9a-f]+)$")
 # v2sessions bodies are truncated at 24KB by the extension, so only the
 # leading 1-2 session objects survive JSON decoding -- but the truncated TAIL
 # still names every session. These regexes sweep the raw body for
@@ -251,12 +262,14 @@ def _summary_for(sid):
         "lastAgentMessage": None, "lastAgentMessageAt": None,
         "recentMessages": [],
         "lastSeen": None,
+        "costUsd": None, "acuUsed": None, "costAt": None,
         "decidedTitle": None, "symbol": None, "symbolShortcode": None,
         "decidedAt": None,
     })
     # Entries loaded from latest.json may predate newer fields.
     summ.setdefault("recentMessages", [])
     for k in ("statusEnum", "statusEnumAt", "statusMessage", "rawTitle",
+              "costUsd", "acuUsed", "costAt",
               "decidedTitle", "symbol", "symbolShortcode", "decidedAt"):
         summ.setdefault(k, None)
     summ.setdefault("awaiting", False)
@@ -432,6 +445,29 @@ def _note_status(summ, enum, message, ts):
     _derive_awaiting(summ)
 
 
+def _note_cost(summ, obj, ts):
+    """Fold a per-session billing snapshot (newest capture wins).
+
+    Field choice (documented from captured /api/billing/usage/session/<id>
+    bodies): overage_dollars is the session's billed dollar usage -> costUsd;
+    acu_used has been 0 in every observed capture (plans here bill overage
+    dollars, not ACUs), so acuUsed is only stored when positive. Ordering is
+    by capture time (billing responses carry no timestamp of their own).
+    """
+    dollars = obj.get("overage_dollars")
+    acu = obj.get("acu_used")
+    if not isinstance(dollars, (int, float)) \
+            and not isinstance(acu, (int, float)):
+        return
+    if _epoch(ts) < _epoch(summ.get("costAt")):
+        return
+    if isinstance(dollars, (int, float)):
+        summ["costUsd"] = round(float(dollars), 2)
+    if isinstance(acu, (int, float)) and acu > 0:
+        summ["acuUsed"] = round(float(acu), 2)
+    summ["costAt"] = ts
+
+
 def _note_pr(summ, url, state=None, draft=None, merged=None):
     if not url:
         return
@@ -600,6 +636,23 @@ def _fold_net(record):
         return
 
     url = (d.get("url") or "").split("?")[0]
+
+    # Per-session billing usage: small JSON body, never truncated.
+    bm = _BILLING_API.search(url)
+    if bm:
+        sid = _safe_session_id(bm.group(1))
+        if not sid:
+            return
+        try:
+            b = json.loads(body)
+        except ValueError:
+            return
+        if isinstance(b, dict):
+            summ = _summary_for(sid)
+            summ["lastSeen"] = ts
+            _note_cost(summ, b, ts)
+        return
+
     if url.endswith("/v2sessions"):
         try:
             b = json.loads(body)

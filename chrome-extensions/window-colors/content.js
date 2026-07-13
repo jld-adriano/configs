@@ -541,6 +541,22 @@
     return t ? String(t).trim() : null;
   }
 
+  // Session cost, from the sink's captured billing data
+  // (/api/billing/usage/session/<id> -> summary costUsd / acuUsed). Dollar
+  // figure preferred; ACU shown only if a plan ever bills ACUs without a
+  // dollar amount. Null (render nothing) when the session has no captured
+  // billing request -- billing only flows for tabs that captured one.
+  function bannerCost() {
+    if (!streamSummary) return null;
+    if (typeof streamSummary.costUsd === "number") {
+      return "$" + streamSummary.costUsd.toFixed(2);
+    }
+    if (typeof streamSummary.acuUsed === "number") {
+      return streamSummary.acuUsed + " ACU";
+    }
+    return null;
+  }
+
   // Create-or-update the status row IN PLACE on an existing banner. Called
   // unconditionally from updateBanner before the rebuild guards, so the
   // status stays live even while a rebuild is deferred (reply input focused
@@ -794,9 +810,15 @@
       // tabs; cleared while expanded so the full text shows.
       row.style.webkitLineClamp = expanded ? "" : (row.dataset.wcClamp || "");
       // Expanded row fills the (now non-scrolling) container and scrolls
-      // itself; min-height:0 lets it shrink below 40vh in short windows.
+      // itself; min-height:0 lets it shrink below the cap in short windows.
+      // The max-height is viewport-aware (inline, beats stale stylesheets):
+      // 40vh normally, but never more than the viewport minus the banner's
+      // fixed rows, so expanding can't push the reply input off-screen.
       row.style.flex = expanded ? "1 1 auto" : "";
       row.style.minHeight = expanded ? "0" : "";
+      row.style.maxHeight = expanded
+        ? "min(40vh, calc(100vh - 120px))"
+        : "";
     });
   }
 
@@ -812,6 +834,7 @@
     const messages = bannerMessages();
     const statusText = bannerStatus();
     const statusAwaiting = !!(streamSummary && streamSummary.awaiting);
+    const costText = bannerCost();
     // The expanded row is an index into `messages`; if the list shrank (or
     // vanished) since it was expanded, drop back to the normal view.
     if (expandedMsgIdx >= messages.length) expandedMsgIdx = -1;
@@ -819,7 +842,8 @@
     // regex (anchored at the front) keeps working.
     const state =
       (bannerHidden ? "H|" : "S|") + expandedMsgIdx + "|" +
-      symbol + "|" + title + "|" + [...prs.keys()].join(",") + "|" +
+      symbol + "|" + title + "|" + (costText || "") + "|" +
+      [...prs.keys()].join(",") + "|" +
       messages.map((m) => m[0] + m[1]).join("|") + "|" +
       (statusAwaiting ? "A" : "-") + (statusText || "");
     let banner = document.getElementById("wc-banner");
@@ -853,6 +877,13 @@
     // pushed off the bottom of the viewport.
     banner.style.display = "flex";
     banner.style.flexDirection = "column";
+    // Hard clamps (inline for the same stale-stylesheet reason): the banner
+    // must never exceed the window width in narrow tiled windows, and the
+    // max-width/max-height caps must CLIP anything that still doesn't fit
+    // instead of letting it spill over the page. Children wrap/scroll
+    // internally (see style.css), so clipping only bites in degenerate cases.
+    banner.style.maxWidth = "min(1200px, calc(100vw - 16px))";
+    banner.style.overflow = "hidden";
 
     const titleRow = document.createElement("div");
     titleRow.id = "wc-banner-title";
@@ -870,6 +901,17 @@
     titleRow.appendChild(sym);
     titleRow.appendChild(titleText);
     banner.appendChild(titleRow);
+
+    // Session cost (captured billing data), a small dimmed figure sitting
+    // next to the ⓘ/collapse icons. Rendered ONLY when the sink has billing
+    // data for this session -- no placeholder otherwise.
+    if (costText) {
+      const cost = document.createElement("span");
+      cost.id = "wc-banner-cost";
+      cost.textContent = costText;
+      cost.title = "Session usage (captured billing data)";
+      titleRow.appendChild(cost);
+    }
 
     // Small debug affordance: reveals the raw sink summary + this tab's own
     // report that every determination (awaiting, PRs, title/symbol) is based on.
@@ -903,12 +945,26 @@
       const prRow = document.createElement("div");
       prRow.id = "wc-banner-prs";
       prRow.style.flex = "0 0 auto";
+      // Height cap inline (beats stale stylesheets): a long PR list scrolls
+      // within ~3 rows instead of eating the banner's vertical budget.
+      prRow.style.maxHeight = "41px";
+      prRow.style.overflowY = "auto";
+      prRow.style.overflowX = "hidden";
       for (const [href, label] of prs) {
         const a = document.createElement("a");
         a.href = href;
         a.textContent = label;
         a.target = href.includes("github.com") ? "_blank" : "_self";
         a.rel = "noopener";
+        // Inline (beats stale injected stylesheets of long-lived tabs):
+        // chips stay one line each, but a single very long PR title
+        // ellipsizes at 40ch instead of forcing the banner's intrinsic
+        // width past the viewport (nowrap text in a flex-wrap row still
+        // widens the row by its longest single chip).
+        a.style.whiteSpace = "nowrap";
+        a.style.maxWidth = "min(40ch, 100%)";
+        a.style.overflow = "hidden";
+        a.style.textOverflow = "ellipsis";
         prRow.appendChild(a);
       }
       banner.appendChild(prRow);
