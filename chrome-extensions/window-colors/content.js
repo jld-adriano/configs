@@ -522,7 +522,7 @@
   // messages simply don't fill their clamps, so more of the (up to 6) rows
   // fit visually. Array is NEWEST-FIRST; rows still render oldest -> newest
   // like a transcript, so row idx maps to alloc[count - 1 - idx].
-  const MSG_LINE_ALLOC = [8, 3, 1, 1, 1, 1];
+  const MSG_LINE_ALLOC = [7, 3, 1, 1, 1, 1];
 
   function msgLineClamp(idx, count) {
     return MSG_LINE_ALLOC[count - 1 - idx] || 1;
