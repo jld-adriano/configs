@@ -946,8 +946,9 @@
       prRow.id = "wc-banner-prs";
       prRow.style.flex = "0 0 auto";
       // Height cap inline (beats stale stylesheets): a long PR list scrolls
-      // within ~3 rows instead of eating the banner's vertical budget.
-      prRow.style.maxHeight = "41px";
+      // within ~3 rows instead of eating the banner's vertical budget
+      // (row = 9px font * 1.2 + 2px gap; keep in sync with style.css).
+      prRow.style.maxHeight = "37px";
       prRow.style.overflowY = "auto";
       prRow.style.overflowX = "hidden";
       for (const [href, label] of prs) {
