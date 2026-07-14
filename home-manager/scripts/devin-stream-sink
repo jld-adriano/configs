@@ -28,7 +28,8 @@ events.jsonl on first start):
                           statusEnumAt, awaiting,
                           costUsd, acuUsed, costAt,
                           prs: [{number,title,url,state,merged,
-                          draft}], lastHumanMessage, lastAgentMessage,
+                          draft,observedAt}], prsAt,
+                          lastHumanMessage, lastAgentMessage,
                           recentMessages: [{role: "human"|"agent", text, ts}]
                           (last 6 chat messages, oldest -> newest; the latest
                           HUMAN message is always represented -- see
@@ -77,6 +78,18 @@ Payload sources (documented from captured traffic):
   * GET /api/sessions/devin-<id>/prs -> [{pr_url, state, draft,
         github_pr_data:{merged, number, title, ...}}] (bodies truncated at
         24KB by the extension, so this is parsed with regexes)
+
+  PR folding is per-PR newest-observation-wins (keyed by pr_url, ordered by
+  capture time, kept as observedAt): a laggy tab's older capture can arrive
+  AFTER a fresher poll and must not regress a state -- v2sessions bodies
+  carry no per-PR timestamp, so arrival-order last-write-wins used to let
+  stale "open" overwrite "merged" (and the boot backfill re-folds up to an
+  hour of old captures over the fresh persisted summary). Additionally, a
+  fully-decoded session object's pull_requests list is the AUTHORITATIVE
+  current PR set, so it REPLACES the summary's set (dropping PRs Devin no
+  longer lists, e.g. detached ones) -- prsAt records the replacement time.
+  Truncated partial sweeps (the /prs regex; any path that never decoded the
+  session's full row) only upsert individual PRs and never drop any.
   * GET /api/billing/usage/session/devin-<id> -> {acu_used,
         acu_used_since_last_reset, max_acu_limit, overage_dollars,
         overage_dollars_since_last_reset}. The per-session dollar figure is
@@ -255,7 +268,8 @@ def _norm_text(text):
 
 def _summary_for(sid):
     summ = STATE["summary"].setdefault(sid, {
-        "title": None, "rawTitle": None, "status": None, "prs": [],
+        "title": None, "rawTitle": None, "status": None,
+        "prs": [], "prsAt": None,
         "statusEnum": None, "statusEnumAt": None, "statusMessage": None,
         "awaiting": False,
         "lastHumanMessage": None, "lastHumanMessageAt": None,
@@ -269,7 +283,7 @@ def _summary_for(sid):
     # Entries loaded from latest.json may predate newer fields.
     summ.setdefault("recentMessages", [])
     for k in ("statusEnum", "statusEnumAt", "statusMessage", "rawTitle",
-              "costUsd", "acuUsed", "costAt",
+              "costUsd", "acuUsed", "costAt", "prsAt",
               "decidedTitle", "symbol", "symbolShortcode", "decidedAt"):
         summ.setdefault(k, None)
     summ.setdefault("awaiting", False)
@@ -468,7 +482,17 @@ def _note_cost(summ, obj, ts):
     summ["costAt"] = ts
 
 
-def _note_pr(summ, url, state=None, draft=None, merged=None):
+def _note_pr(summ, url, state=None, draft=None, merged=None, ts=None):
+    """Upsert one PR observation, newest capture wins (keyed by url).
+
+    PR payloads carry no timestamp of their own, so ordering is by capture
+    time (observedAt). Guarding on it matters twice: a laggy/cached tab can
+    deliver an OLDER v2sessions body after the fresh designated-tab poll,
+    and the boot backfill re-folds up to an hour of retained captures over
+    the fresher persisted summary -- with plain last-write-wins either one
+    regressed "merged" back to "open". An untimestamped observation only
+    fills a slot that never saw a timestamped one (epoch 0 vs 0).
+    """
     if not url:
         return
     for pr in summ["prs"]:
@@ -477,8 +501,12 @@ def _note_pr(summ, url, state=None, draft=None, merged=None):
     else:
         num = re.search(r"/pull/(\d+)", url)
         pr = {"number": int(num.group(1)) if num else None, "title": None,
-              "url": url, "state": None, "merged": False, "draft": False}
+              "url": url, "state": None, "merged": False, "draft": False,
+              "observedAt": None}
         summ["prs"].append(pr)
+    if _epoch(ts) < _epoch(pr.get("observedAt")):
+        return
+    pr["observedAt"] = ts or pr.get("observedAt")
     if state is not None:
         pr["state"] = state
         pr["merged"] = (state == "merged") if merged is None else bool(merged)
@@ -486,6 +514,32 @@ def _note_pr(summ, url, state=None, draft=None, merged=None):
         pr["merged"] = bool(merged)
     if draft is not None:
         pr["draft"] = bool(draft)
+
+
+def _set_prs(summ, prs_list, ts):
+    """Adopt a fully-decoded pull_requests list as the session's PR set.
+
+    A complete session row (full or leading-item-decoded v2sessions, the
+    single-session detail endpoint) carries the session's ENTIRE current PR
+    list, so it authoritatively REPLACES the summary's set: PRs Devin no
+    longer lists (closed-and-detached, moved) are dropped instead of
+    lingering as stale "open" forever. Only called with a list that came out
+    of json-decoding a complete object -- truncated regex sweeps must keep
+    going through _note_pr upserts so a partial view never wipes the set.
+    Skipped when a newer replacement (prsAt) already happened, so the boot
+    backfill / a laggy tab can't shrink or regress the set.
+    """
+    if not isinstance(prs_list, list):
+        return
+    if _epoch(ts) < _epoch(summ.get("prsAt")):
+        return
+    keep = {pr.get("pr_url") for pr in prs_list if isinstance(pr, dict)}
+    summ["prs"] = [pr for pr in summ["prs"] if pr["url"] in keep]
+    for pr in prs_list:
+        if isinstance(pr, dict):
+            _note_pr(summ, pr.get("pr_url"),
+                     state=pr.get("state"), draft=pr.get("draft"), ts=ts)
+    summ["prsAt"] = ts
 
 
 _DECODER = json.JSONDecoder()
@@ -531,10 +585,11 @@ def _fold_session_obj(obj, ts):
     if isinstance(lsc, dict):
         _note_status(summ, lsc.get("enum"), lsc.get("message"),
                      lsc.get("timestamp") or obj.get("latest_status_event_at"))
-    for pr in obj.get("pull_requests") or []:
-        if isinstance(pr, dict):
-            _note_pr(summ, pr.get("pr_url"),
-                     state=pr.get("state"), draft=pr.get("draft"))
+    # A decoded row's pull_requests is the session's full current PR list ->
+    # authoritative set replacement. Some v2sessions variants (e.g.
+    # group_children single-session lookups) omit the field entirely; that
+    # is "no information", not "no PRs", and _set_prs ignores non-lists.
+    _set_prs(summ, obj.get("pull_requests"), ts)
     _note_message(summ, obj.get("initial_user_message_contents"))
     _note_message(summ, obj.get("latest_message_contents"))
 
@@ -681,15 +736,29 @@ def _fold_net(record):
     m = _SESSION_API.search(url)
     if not m:
         return
-    if m.group(2):  # /prs endpoint (body usually truncated -> regex)
+    if m.group(2):  # /prs endpoint
         sid = _safe_session_id(m.group(1))
         if not sid:
             return
         summ = _summary_for(sid)
         summ["lastSeen"] = ts
-        for pm in _PR_ITEM.finditer(body):
-            _note_pr(summ, pm.group(1),
-                     state=pm.group(2), draft=pm.group(3) == "true")
+        try:  # a body that decodes whole is the full authoritative PR list
+            items = json.loads(body)
+        except ValueError:
+            items = None
+        if isinstance(items, list):
+            _set_prs(summ, items, ts)
+            for pr in items:
+                if isinstance(pr, dict) \
+                        and isinstance(pr.get("github_pr_data"), dict):
+                    _note_pr(summ, pr.get("pr_url"),
+                             merged=pr["github_pr_data"].get("merged"),
+                             ts=ts)
+        else:  # truncated (24KB cutoff): PARTIAL regex sweep -- upsert the
+            # leading items only, never treat it as the full set.
+            for pm in _PR_ITEM.finditer(body):
+                _note_pr(summ, pm.group(1), state=pm.group(2),
+                         draft=pm.group(3) == "true", ts=ts)
     else:  # single-session detail
         try:
             b = json.loads(body)
