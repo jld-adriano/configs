@@ -278,14 +278,17 @@ async function openSessionIds() {
   }
 }
 
-async function pollV2Sessions() {
+// Shared poll driver: walk the candidate tabs and replay one batched
+// v2sessions request for `ids` (or the broad newest-100 list when empty),
+// stopping at the first authenticated success. Used by both the fast
+// active poll (open tabs' sessions) and the slow dormant backfill.
+async function runV2Poll(ids, eventName) {
   var tabs = await candidatePollTabs();
   if (!tabs.length) {
-    sinkEvent({ event: "active-poll", ok: false, reason: "no-tab", bootId: BOOT_ID });
+    sinkEvent({ event: eventName, ok: false, reason: "no-tab", bootId: BOOT_ID });
     return;
   }
   var fallback = fallbackV2Url();
-  var ids = await openSessionIds();
   var last = null, tried = 0;
   for (var i = 0; i < tabs.length && tried < POLL_MAX_TABS; i++) {
     var tab = tabs[i];
@@ -308,13 +311,86 @@ async function pollV2Sessions() {
     if (res && res.ok) { lastGoodPollTabId = tab.id; break; }
   }
   sinkEvent(Object.assign(
-    { event: "active-poll", tried: tried }, last || {}, { bootId: BOOT_ID }));
+    { event: eventName, tried: tried, ids: (ids || []).length },
+    last || {}, { bootId: BOOT_ID }));
+}
+
+async function pollV2Sessions() {
+  return runV2Poll(await openSessionIds(), "active-poll");
 }
 
 chrome.alarms.create("poll-v2sessions", { periodInMinutes: 2.5 });
 
+// ── Dormant-session backfill ─────────────────────────────────────────────────
+// The active poll only refreshes the sessions with an OPEN tab, so sessions
+// whose tab was closed keep stale PR/status data in the sink forever (until
+// manually revisited). This slow rolling backfill fixes that: every cycle it
+// asks the sink for every session id it has ever summarized, keeps the ones
+// that are DORMANT (no open tab AND not observed recently -- recently-seen
+// ids are already covered by the active poll / live capture), and replays
+// one batched v2sessions request for the next BACKFILL_BATCH of them,
+// rotating alphabetically via a persisted cursor so the whole backlog cycles
+// through over time (~70 dormant ids / 40 per 5-min cycle ≈ a full refresh
+// every ~10 min; a 1000-id backlog would still cycle in ~2h). Exactly one
+// batched request per cycle -- same authenticated MAIN-world fetch + full-
+// body capture path as the active poll, so the response folds through the
+// sink's locked ingest path and authoritatively refreshes PR sets/status.
+// Growth note: the id universe is the sink's summary (every session ever
+// captured, currently ~1200); it only grows as the user creates sessions,
+// and a bigger backlog just means a longer rotation, never more than one
+// request per cycle -- so no hard cap is enforced here.
+var BACKFILL_PERIOD_MIN = 5;
+var BACKFILL_BATCH = 40;
+var BACKFILL_DORMANT_MS = 15 * 60 * 1000; // observed more recently = skip
+var SESSION_IDS_URL = "http://127.0.0.1:48292/session-ids";
+
+// Sink timestamps are ISO with a colon-less offset ("-0700"); normalize for
+// Date.parse.
+function parseSinkTs(ts) {
+  if (!ts) return NaN;
+  return Date.parse(String(ts).replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+}
+
+async function backfillDormantSessions() {
+  var known;
+  try {
+    var res = await fetch(SESSION_IDS_URL);
+    if (!res.ok) return;
+    known = (await res.json()).ids || [];
+  } catch (e) {
+    return; // sink not running
+  }
+  var open = {};
+  (await openSessionIds()).forEach(function (id) { open[id] = 1; });
+  var now = Date.now();
+  var dormant = [];
+  for (var i = 0; i < known.length; i++) {
+    var id = "devin-" + known[i].id;
+    if (open[id]) continue;
+    var seen = parseSinkTs(known[i].lastSeen);
+    if (isFinite(seen) && now - seen < BACKFILL_DORMANT_MS) continue;
+    dormant.push(id);
+  }
+  if (!dormant.length) return;
+  dormant.sort(); // stable order so the rotating cursor cycles everything
+  var store = await chrome.storage.local.get("backfillCursor");
+  var cursor = store.backfillCursor || 0;
+  if (cursor >= dormant.length) cursor = 0;
+  var batch = dormant.slice(cursor, cursor + BACKFILL_BATCH);
+  if (batch.length < BACKFILL_BATCH) {
+    batch = batch.concat(dormant.slice(0, BACKFILL_BATCH - batch.length));
+  }
+  await chrome.storage.local.set({
+    backfillCursor: (cursor + batch.length) % dormant.length,
+  });
+  await runV2Poll(batch.slice(0, POLL_MAX_IDS), "backfill-poll");
+}
+
+chrome.alarms.create("backfill-v2sessions", { periodInMinutes: BACKFILL_PERIOD_MIN });
+
 chrome.alarms.onAlarm.addListener(function (alarm) {
   if (alarm.name === "poll-v2sessions") pollV2Sessions();
+  if (alarm.name === "backfill-v2sessions") backfillDormantSessions();
 });
 
 // ── Boot ────────────────────────────────────────────────────────────────────
