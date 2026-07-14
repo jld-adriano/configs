@@ -118,6 +118,8 @@ Inspect with:
 
     curl -s 127.0.0.1:48292/state | jq .      # full snapshot incl. summary
     curl -s 127.0.0.1:48292/summary | jq .    # just the per-session summary
+    curl -s 127.0.0.1:48292/session-ids | jq . # all known ids + lastSeen
+                                               # (drives the ext's backfill)
     tail -f ~/.local/state/devin-stream/events.jsonl
     ls ~/.local/state/devin-stream/sessions/
 """
@@ -150,11 +152,16 @@ SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]")
 # captured Devin API payloads (see module docstring for the payload paths).
 STATE = {"sessions": {}, "discovery": None, "summary": {}, "updatedAt": None}
 
-# The HTTP server (main thread) and the LLM enrichment thread both mutate
-# STATE and serialize it (latest.json, GET responses); serializing a dict
-# while the other thread inserts keys raises RuntimeError, hence the lock.
-# Never held across network calls.
-STATE_LOCK = threading.Lock()
+# Threading model: the HTTP server is a plain single-threaded HTTPServer
+# (one request at a time, on the main thread), so EXACTLY TWO threads touch
+# STATE: the request-handler thread (POST /ingest folds captures; GETs
+# serialize summaries) and the LLM enrichment daemon thread. Serializing or
+# iterating a dict while the other thread inserts keys raises RuntimeError
+# ("dictionary changed size during iteration") and can produce torn reads,
+# hence one RLock guarding every STATE mutation and every read that
+# iterates/serializes it. Hold times stay short: snapshot/serialize under
+# the lock, do network and slow I/O outside; never held across LLM calls.
+STATE_LOCK = threading.RLock()
 
 
 def _rotate(path, limit):
@@ -183,10 +190,29 @@ def _load_latest():
 
 
 def _write_latest():
-    tmp = LATEST_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(STATE, f, indent=2, default=str)
-    os.replace(tmp, LATEST_FILE)
+    """Persist STATE to latest.json atomically.
+
+    Serialization iterates STATE, so it happens under the lock; the multi-MB
+    file write happens OUTSIDE the lock and goes to a UNIQUE temp file that
+    is os.replace'd into place, so a concurrent reader (or a crash mid-write)
+    never sees a half-written latest.json. The temp name is unique per
+    thread: the old shared ".tmp" path let the handler thread and the LLM
+    thread interleave writes into the same temp file (a stale multi-hundred-
+    KB latest.json.tmp was found on disk), which os.replace would then have
+    published as garbage.
+    """
+    with STATE_LOCK:
+        data = json.dumps(STATE, indent=2, default=str)
+    tmp = "%s.%d.%d.tmp" % (LATEST_FILE, os.getpid(), threading.get_ident())
+    try:
+        with open(tmp, "w") as f:
+            f.write(data)
+        os.replace(tmp, LATEST_FILE)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 # ── Per-session summary (folded from captured Devin API payloads) ───────────
@@ -1158,14 +1184,25 @@ def _llm_cycle(cache, api_key):
     LLM_MAX_CALLS_PER_CYCLE API calls on sessions that lack a decision for
     their CURRENT raw title (new sessions or renamed ones), freshest first.
     """
+    # Deep-copy the fields this cycle needs while holding the lock: the
+    # handler thread mutates these summary dicts (and re-sorts their
+    # recentMessages lists) concurrently, so live references must not be
+    # read outside the lock. The snapshot keeps the lock hold short and the
+    # LLM network calls entirely lock-free.
     with STATE_LOCK:
         items = sorted(
-            STATE["summary"].items(),
-            key=lambda kv: str(kv[1].get("lastSeen") or ""), reverse=True)
+            ({"sid": sid, "title": s.get("title"),
+              "recentMessages": [dict(m)
+                                 for m in (s.get("recentMessages") or [])],
+              "decidedTitle": s.get("decidedTitle"),
+              "symbol": s.get("symbol"),
+              "lastSeen": str(s.get("lastSeen") or "")}
+             for sid, s in STATE["summary"].items()),
+            key=lambda it: it["lastSeen"], reverse=True)
     calls = 0
     changed = False
-    for sid, summ in items:
-        raw_title = summ.get("title")
+    for it in items:
+        sid, raw_title = it["sid"], it["title"]
         if not raw_title:
             continue
         ck = _llm_cache_key(sid, raw_title)
@@ -1174,7 +1211,7 @@ def _llm_cycle(cache, api_key):
             if not api_key or calls >= LLM_MAX_CALLS_PER_CYCLE:
                 continue
             calls += 1
-            dec = _llm_decide(api_key, raw_title, summ.get("recentMessages"))
+            dec = _llm_decide(api_key, raw_title, it["recentMessages"])
             if dec is None:
                 continue  # keep the previous decision / consumer fallback
             dec["rawTitle"] = raw_title
@@ -1182,9 +1219,12 @@ def _llm_cycle(cache, api_key):
             cache[ck] = dec
             _save_llm_cache(cache)
             _log("llm: %s -> %s %r" % (sid[:8], dec["emoji"], dec["title"]))
-        if (summ.get("decidedTitle") != dec["title"]
-                or summ.get("symbol") != dec["emoji"]):
+        if (it["decidedTitle"] != dec["title"]
+                or it["symbol"] != dec["emoji"]):
             with STATE_LOCK:
+                summ = STATE["summary"].get(sid)
+                if summ is None:
+                    continue
                 summ["rawTitle"] = raw_title
                 summ["decidedTitle"] = dec["title"]
                 summ["symbol"] = dec["emoji"]
@@ -1192,11 +1232,7 @@ def _llm_cycle(cache, api_key):
                 summ["decidedAt"] = dec["decidedAt"]
             changed = True
     if changed:
-        with STATE_LOCK:
-            try:
-                _write_latest()
-            except OSError:
-                pass
+        _write_latest()
 
 
 def _llm_loop():
@@ -1216,7 +1252,11 @@ def _llm_loop():
 
 
 def _apply(record):
-    """Fold one envelope into the aggregated snapshot + per-session logs."""
+    """Fold one envelope into the aggregated in-memory snapshot.
+
+    Mutates STATE only -- callers must hold STATE_LOCK. The per-session
+    disk log lives in _log_session so file I/O stays outside the lock.
+    """
     STATE["updatedAt"] = record["ts"]
     kind = record.get("kind")
 
@@ -1251,7 +1291,12 @@ def _apply(record):
                 sess[k] = data[k]
     STATE["sessions"][sid] = sess
 
-    # Per-session append-only log.
+
+def _log_session(record):
+    """Per-session append-only log (pure file I/O; no STATE access)."""
+    sid = _safe_session_id(record.get("sessionId"))
+    if sid is None:
+        return
     path = os.path.join(SESSIONS_DIR, sid + ".jsonl")
     _rotate(path, MAX_SESSION_LOG_BYTES)
     with open(path, "a") as f:
@@ -1260,7 +1305,9 @@ def _apply(record):
 
 class Handler(BaseHTTPRequestHandler):
     def _respond(self, code, body):
-        data = json.dumps(body, default=str).encode()
+        return self._respond_raw(code, json.dumps(body, default=str).encode())
+
+    def _respond_raw(self, code, data):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1289,36 +1336,51 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(events, list):
             events = [payload]
 
+        # File I/O (event log, per-session logs) runs unlocked; only the
+        # STATE folds need the lock, and they're pure in-memory dict work,
+        # so the LLM thread is never blocked behind disk writes.
         ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         _rotate(LOG_FILE, MAX_LOG_BYTES)
-        n = 0
+        records = []
+        with open(LOG_FILE, "a") as f:
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+                record = {"ts": ts, **ev}
+                f.write(json.dumps(record, default=str) + "\n")
+                records.append(record)
         with STATE_LOCK:
-            with open(LOG_FILE, "a") as f:
-                for ev in events:
-                    if not isinstance(ev, dict):
-                        continue
-                    record = {"ts": ts, **ev}
-                    f.write(json.dumps(record, default=str) + "\n")
-                    _apply(record)
-                    n += 1
-            try:
-                _write_latest()
-            except OSError:
-                pass
-        self._respond(200, {"ok": True, "ingested": n})
+            for record in records:
+                _apply(record)
+        for record in records:
+            _log_session(record)
+        _write_latest()
+        self._respond(200, {"ok": True, "ingested": len(records)})
 
     def do_GET(self):
-        # Serialize under the lock: the LLM thread inserts summary keys, and
-        # json.dumps over a mutating dict raises RuntimeError.
+        # SERIALIZE under the lock (json.dumps iterates STATE, and the
+        # ingest fold / LLM thread insert keys concurrently -- "dictionary
+        # changed size during iteration"), but write to the SOCKET outside
+        # it, so a slow client can never stall the other thread.
         if self.path.startswith("/state"):
             with STATE_LOCK:
-                return self._respond(200, STATE)
+                data = json.dumps(STATE, default=str).encode()
+            return self._respond_raw(200, data)
         if self.path.startswith("/summary"):
             with STATE_LOCK:
-                return self._respond(200, {
+                data = json.dumps({
                     "sessions": STATE["summary"],
                     "updatedAt": STATE["updatedAt"],
-                })
+                }, default=str).encode()
+            return self._respond_raw(200, data)
+        # Every session id the sink has ever summarized, with its last
+        # observation time -- drives the devin-stream extension's slow
+        # rolling backfill of dormant sessions (see its background.js).
+        if self.path.startswith("/session-ids"):
+            with STATE_LOCK:
+                ids = [{"id": sid, "lastSeen": s.get("lastSeen")}
+                       for sid, s in STATE["summary"].items()]
+            return self._respond(200, {"ids": ids, "count": len(ids)})
         return self._respond(404, {"error": "unknown path"})
 
     def log_message(self, *args):
@@ -1327,6 +1389,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(SESSIONS_DIR, exist_ok=True)
+    # Stale temp files from a crash mid-write (incl. the old shared-name
+    # scheme) are dead weight; latest.json itself is always complete thanks
+    # to the os.replace publish.
+    for name in os.listdir(STATE_DIR):
+        if name.startswith(os.path.basename(LATEST_FILE) + ".") \
+                and name.endswith(".tmp"):
+            try:
+                os.remove(os.path.join(STATE_DIR, name))
+            except OSError:
+                pass
+    # Everything below runs single-threaded: the LLM thread and the HTTP
+    # server only start after the backfill completes, so these boot-time
+    # STATE mutations don't need the lock.
     _load_latest()
     # Keep the persisted summary rather than resetting it: at current capture
     # volume the retained event logs rotate away within minutes, so a fresh
@@ -1337,6 +1412,10 @@ def main():
         _derive_awaiting(_summary_for(sid))
     _backfill_summary()
     threading.Thread(target=_llm_loop, name="llm-enrich", daemon=True).start()
+    # Deliberately the plain single-threaded HTTPServer: requests are
+    # handled one at a time on this thread, so STATE is only ever contended
+    # between the handler thread and the LLM daemon thread (see STATE_LOCK).
+    # Do not swap in ThreadingHTTPServer without re-auditing the locking.
     HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
 
