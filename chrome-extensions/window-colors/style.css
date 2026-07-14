@@ -215,7 +215,11 @@
   text-shadow: var(--wc-text-shadow, 0 1px 2px rgba(0, 0, 0, 0.5));
   line-height: 1.25;
   margin-bottom: 2px;
-  /* long unbroken tokens (URLs, hashes) must wrap, never widen the banner */
+  /* preserve the newlines the sink keeps in recentMessages (numbered lists,
+     multi-line RCAs): the default `normal` collapsed them into one smushed
+     line. pre-wrap still wraps at the banner edge, and overflow-wrap below
+     keeps long unbroken tokens (URLs, hashes) from widening the banner. */
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
   /* no per-row clamp or click-to-expand: rows show their full text and the

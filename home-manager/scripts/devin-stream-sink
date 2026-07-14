@@ -24,7 +24,8 @@ On top of the raw capture we maintain a clean per-session SUMMARY, folded from
 the captured Devin API payloads as they arrive (and backfilled from
 events.jsonl on first start):
 
-    summary[sessionId] = {title, rawTitle, status, statusEnum, statusMessage,
+    summary[sessionId] = {title, rawTitle, status, statusAt,
+                          statusEnum, statusMessage,
                           statusEnumAt, awaiting,
                           costUsd, acuUsed, costAt,
                           prs: [{number,title,url,state,merged,
@@ -58,8 +59,14 @@ flags the window-colors content script used to compute from page text:
                                                       latest_status_contents)
 
     awaiting = (enum == "blocked")          # "Waiting for your response"
-               or (status == "suspended")   # asleep ("Devin went to sleep",
+               or (status == "suspended"    # asleep ("Devin went to sleep",
                                             # incl. crashed/user_inactivity)
+                   and no NEWER "working" status_update)  # a wake emits
+                                            # "working" over the WS minutes
+                                            # before a poll refreshes the
+                                            # lifecycle status to "running";
+                                            # the newest observation governs
+                                            # (see _derive_awaiting)
 
 Every tab whose text scan said awaiting=true and that had sink coverage was
 either suspended, or running with enum "blocked"; enum "working" ("Devin is
@@ -299,7 +306,19 @@ def _epoch(ts):
 
 
 def _trunc_msg(text, limit=MSG_TRUNC):
+    """One-line truncation for the compact last*Message summary fields:
+    whitespace runs (including newlines) collapse to single spaces."""
     text = " ".join(str(text).split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _trunc_display(text, limit=RECENT_TRUNC):
+    """Truncation for recentMessages, which the banner RENDERS: line breaks
+    are display content (numbered lists, RCAs) and must survive, so only
+    line endings are normalized and horizontal runs collapsed per line --
+    never newlines. Dedup comparisons go through _norm_text separately."""
+    text = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(" ".join(ln.split()) for ln in text.split("\n")).strip("\n")
     return text[:limit] + ("…" if len(text) > limit else "")
 
 
@@ -310,7 +329,7 @@ def _norm_text(text):
 
 def _summary_for(sid):
     summ = STATE["summary"].setdefault(sid, {
-        "title": None, "rawTitle": None, "status": None,
+        "title": None, "rawTitle": None, "status": None, "statusAt": None,
         "prs": [], "prsAt": None,
         "statusEnum": None, "statusEnumAt": None, "statusMessage": None,
         "awaiting": False,
@@ -324,7 +343,8 @@ def _summary_for(sid):
     })
     # Entries loaded from latest.json may predate newer fields.
     summ.setdefault("recentMessages", [])
-    for k in ("statusEnum", "statusEnumAt", "statusMessage", "rawTitle",
+    for k in ("statusEnum", "statusEnumAt", "statusMessage", "statusAt",
+              "rawTitle",
               "costUsd", "acuUsed", "costAt", "prsAt",
               "decidedTitle", "symbol", "symbolShortcode", "decidedAt"):
         summ.setdefault(k, None)
@@ -416,9 +436,9 @@ def _note_recent(summ, role, text, ts, approx=False):
                 m["ts"] = ts  # authoritative server time replaces the estimate
                 m.pop("approx", None)
                 recent.sort(key=lambda x: _epoch(x["ts"]))
-            m["text"] = _trunc_msg(text, RECENT_TRUNC)
+            m["text"] = _trunc_display(text)
             return
-    entry = {"role": role, "text": _trunc_msg(text, RECENT_TRUNC), "ts": ts}
+    entry = {"role": role, "text": _trunc_display(text), "ts": ts}
     if approx:
         entry["approx"] = True
     recent.append(entry)
@@ -480,9 +500,56 @@ def _derive_awaiting(summ):
     text-based detection (see module docstring). "blocked" comes from
     status_update events ("Waiting for your response"); "suspended" covers
     sleep from user inactivity and crashes ("Devin went to sleep").
+
+    The two signals update independently (status_update over the live WS in
+    seconds; lifecycle status from v2sessions polls minutes apart), so the
+    NEWEST observation governs rather than a plain OR of both:
+
+    - enum "blocked" -> awaiting, until a newer status_update replaces the
+      enum (_note_status is newest-timestamp-wins, so a later "working"
+      clears it by itself).
+    - status "suspended" -> asleep -> awaiting, UNLESS a status_update
+      NEWER than the suspension observation (statusAt) says the session is
+      actively working: waking a sleeping session emits the "working"
+      update over the WS minutes before the next poll refreshes the
+      lifecycle status to "running", and during that gap the old sticky OR
+      held awaiting=true while statusMessage read "Devin is thinking..."
+      -- the contradictory banner. The timestamp comparison (not the enum
+      alone) matters because a genuinely sleeping session legitimately
+      retains an OLDER "working" enum from before it fell asleep.
+      statusAt falls back to lastSeen for summaries persisted before the
+      field existed (conservative: suspension reads as fresh, so a stale
+      pre-sleep "working" enum can't wrongly clear it).
     """
-    summ["awaiting"] = (summ.get("statusEnum") == "blocked"
-                        or summ.get("status") == "suspended")
+    if summ.get("statusEnum") == "blocked":
+        summ["awaiting"] = True
+        return
+    suspended = summ.get("status") == "suspended"
+    if suspended and summ.get("statusEnum") == "working" \
+            and _epoch(summ.get("statusEnumAt")) \
+            > _epoch(summ.get("statusAt") or summ.get("lastSeen")):
+        suspended = False
+    summ["awaiting"] = suspended
+
+
+def _note_lifecycle_status(summ, status, ts):
+    """Record the session lifecycle status (newest capture wins).
+
+    v2sessions bodies carry no per-session timestamp for `status`, so
+    ordering is by capture time (statusAt). Guarding on it matters for the
+    same reasons as _note_pr: a laggy/cached tab can deliver an OLDER body
+    after a fresh poll, and the boot backfill re-folds up to an hour of old
+    captures -- plain arrival-order last-write-wins let a stale "suspended"
+    overwrite a fresh "running" (or vice versa). An untimestamped
+    observation only fills a slot that never saw a timestamped one.
+    """
+    if not status:
+        return
+    if _epoch(ts) < _epoch(summ.get("statusAt")):
+        return
+    summ["status"] = status
+    summ["statusAt"] = ts or summ.get("statusAt")
+    _derive_awaiting(summ)
 
 
 def _note_status(summ, enum, message, ts):
@@ -620,9 +687,7 @@ def _fold_session_obj(obj, ts):
     if obj.get("title"):
         summ["title"] = obj["title"]
         summ["rawTitle"] = obj["title"]
-    if obj.get("status"):
-        summ["status"] = obj["status"]
-        _derive_awaiting(summ)
+    _note_lifecycle_status(summ, obj.get("status"), ts)
     lsc = obj.get("latest_status_contents")
     if isinstance(lsc, dict):
         _note_status(summ, lsc.get("enum"), lsc.get("message"),
@@ -646,8 +711,7 @@ def _sweep_v2_statuses(body, ts):
             continue
         summ = _summary_for(sid)
         summ["lastSeen"] = ts
-        summ["status"] = m.group(2)
-        _derive_awaiting(summ)
+        _note_lifecycle_status(summ, m.group(2), ts)
     for m in _V2_SID_STATUS_CONTENTS.finditer(body):
         sid = _safe_session_id(m.group(1))
         if not sid:
