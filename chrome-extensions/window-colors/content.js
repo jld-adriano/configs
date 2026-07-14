@@ -123,12 +123,6 @@
   // Collapsed = a minimal strip (symbol + the two small title-row icons).
   let bannerHidden = false;
 
-  // Per-tab expanded message row (click-to-expand): index into the banner's
-  // message list, -1 = none. Session-scoped like bannerHidden; folded into
-  // the render-state key so rebuilds reproduce it, and toggled in place on
-  // click (no rebuild) so it works even while the reply input holds text.
-  let expandedMsgIdx = -1;
-
   // ── Global HUD visibility toggle ──────────────────────────────────────────
   // A tiny always-visible dot (bottom-right) hides/shows the badge, banner and
   // awaiting line in EVERY tab. Persisted in chrome.storage.local so one click
@@ -529,42 +523,61 @@
     }
   }
 
-  // The banner's chat rows: the last 6 back-and-forth messages (oldest ->
-  // newest, as the conversation happened) from the sink's recentMessages,
-  // falling back to the older two-field summary shape when absent.
-  const MAX_MSGS = 6;
+  // The banner's chat rows: the NEWEST 4 messages from the sink's
+  // recentMessages (which holds 6, oldest -> newest), rendered in REVERSE
+  // chronological order -- newest at the TOP -- and each shown in full (no
+  // line clamps; the messages container scrolls once the banner hits its
+  // viewport height cap, and with newest-at-top the interesting content is
+  // what's visible). Falls back to the older two-field summary shape when
+  // recentMessages is absent.
+  const MAX_MSGS = 4;
 
   function bannerMessages() {
+    // Rows are {icon, text, older}; `older` marks the appended
+    // latest-human-message context row (see below), rendered dimmed.
     let out = [];
     if (streamSummary &&
         Array.isArray(streamSummary.recentMessages) &&
         streamSummary.recentMessages.length) {
-      out = streamSummary.recentMessages
-        .filter((m) => m && m.text)
-        .map((m) => [m.role === "human" ? "👤" : "🤖", m.text]);
+      const all = streamSummary.recentMessages.filter((m) => m && m.text);
+      out = all.slice(-MAX_MSGS).reverse().map((m) => ({
+        icon: m.role === "human" ? "👤" : "🤖",
+        text: m.text,
+        older: false,
+      }));
+      // Latest-human-message guarantee: the sink bakes the latest human
+      // turn into recentMessages (_ensure_human_recent), but slicing the
+      // newest 4 can drop it behind a long agent monologue. When that
+      // happens, append it as an extra row at the BOTTOM (it IS older than
+      // everything above it), dimmed as context.
+      if (!out.some((r) => r.icon === "👤")) {
+        const humans = all.filter((m) => m.role === "human");
+        if (humans.length) {
+          out.push({
+            icon: "👤",
+            text: humans[humans.length - 1].text,
+            older: true,
+          });
+        }
+      }
     } else if (streamSummary) {
-      if (streamSummary.lastHumanMessage)
-        out.push(["👤", streamSummary.lastHumanMessage]);
+      // Two-field fallback: relative order unknown; show agent above human
+      // to match the common "agent replied last" case.
       if (streamSummary.lastAgentMessage)
-        out.push(["🤖", streamSummary.lastAgentMessage]);
+        out.push({ icon: "🤖", text: streamSummary.lastAgentMessage,
+                   older: false });
+      if (streamSummary.lastHumanMessage)
+        out.push({ icon: "👤", text: streamSummary.lastHumanMessage,
+                   older: false });
     }
-    // The just-sent banner reply renders as the newest human turn until the
-    // sink's copy arrives (optimisticPending clears itself on reconcile).
-    if (optimisticPending()) out.push(["👤", optimisticSend.text]);
-    return out.slice(-MAX_MSGS);
-  }
-
-  // Adaptive per-row line budget, heavily top-heavy (13-line total budget):
-  // the NEWEST message gets 10 lines, the second-newest 3, and anything
-  // older collapses to a single-line context crumb. With two long messages
-  // the crumbs' 1-liners are what you see beyond the [10,3] pair; short
-  // messages simply don't fill their clamps, so more of the (up to 6) rows
-  // fit visually. Array is NEWEST-FIRST; rows still render oldest -> newest
-  // like a transcript, so row idx maps to alloc[count - 1 - idx].
-  const MSG_LINE_ALLOC = [7, 3, 1, 1, 1, 1];
-
-  function msgLineClamp(idx, count) {
-    return MSG_LINE_ALLOC[count - 1 - idx] || 1;
+    // The just-sent banner reply is the newest message of all, so it renders
+    // at the TOP until the sink's copy arrives (optimisticPending clears
+    // itself on reconcile).
+    if (optimisticPending()) {
+      out.unshift({ icon: "👤", text: optimisticSend.text, older: false });
+      out = out.slice(0, MAX_MSGS + 1);
+    }
+    return out;
   }
 
   // ── Banner status line ────────────────────────────────────────────────────
@@ -602,7 +615,7 @@
   // Create-or-update the status row IN PLACE on an existing banner. Called
   // unconditionally from updateBanner before the rebuild guards, so the
   // status stays live even while a rebuild is deferred (reply input focused
-  // or holding a draft) -- same in-place philosophy as applyMsgExpansion.
+  // or holding a draft) -- same in-place philosophy as renderOptimisticSend.
   function patchStatusRow(banner, text, awaiting) {
     let row = banner.querySelector("#wc-banner-status");
     if (!text) {
@@ -770,11 +783,10 @@
     if (!msgs) return; // no transcript container yet; next rebuild shows it
     const row = document.createElement("div");
     row.className = "wc-banner-msg";
-    row.dataset.wcClamp = "3";
-    row.style.webkitLineClamp = "3";
     renderMsgText(row, "👤 " + text);
-    msgs.appendChild(row);
-    msgs.scrollTop = msgs.scrollHeight;
+    // Newest-at-top ordering: the just-sent message is the newest of all.
+    msgs.insertBefore(row, msgs.firstChild);
+    msgs.scrollTop = 0;
   }
 
   function sendReply(text) {
@@ -845,48 +857,6 @@
     document.documentElement.appendChild(panel);
   }
 
-  // Apply the click-to-expand state to a banner's message rows: the expanded
-  // row gets .wc-msg-expanded (clamp removed, scrollable), and the banner
-  // gets .wc-msg-expanded-mode, which CSS uses to hide the OTHER rows and
-  // the PR row so the message gets the whole content area. Called both at
-  // build time (updateBanner) and in place from row click handlers.
-  function applyMsgExpansion(banner) {
-    banner = banner || document.getElementById("wc-banner");
-    if (!banner) return;
-    const rows = banner.querySelectorAll(".wc-banner-msg");
-    const expandedMode = expandedMsgIdx >= 0 && expandedMsgIdx < rows.length;
-    banner.classList.toggle("wc-msg-expanded-mode", expandedMode);
-    // Single scrollbar either way (inline, beats stale stylesheets): the
-    // messages container scrolls the clamped transcript normally, but while
-    // a row is expanded the ROW scrolls (max-height 40vh + overflow) and the
-    // container just sizes it -- otherwise the two scroll regions would
-    // double-clip each other.
-    const msgs = banner.querySelector("#wc-banner-msgs");
-    if (msgs) {
-      msgs.style.overflowY = expandedMode ? "hidden" : "auto";
-      msgs.style.display = expandedMode ? "flex" : "";
-      msgs.style.flexDirection = expandedMode ? "column" : "";
-    }
-    rows.forEach((row, idx) => {
-      const expanded = idx === expandedMsgIdx;
-      row.classList.toggle("wc-msg-expanded", expanded);
-      // Per-row line budget (set at build time in row.dataset.wcClamp) as an
-      // INLINE style so it beats any stale injected stylesheet in long-lived
-      // tabs; cleared while expanded so the full text shows.
-      row.style.webkitLineClamp = expanded ? "" : (row.dataset.wcClamp || "");
-      // Expanded row fills the (now non-scrolling) container and scrolls
-      // itself; min-height:0 lets it shrink below the cap in short windows.
-      // The max-height is viewport-aware (inline, beats stale stylesheets):
-      // 40vh normally, but never more than the viewport minus the banner's
-      // fixed rows, so expanding can't push the reply input off-screen.
-      row.style.flex = expanded ? "1 1 auto" : "";
-      row.style.minHeight = expanded ? "0" : "";
-      row.style.maxHeight = expanded
-        ? "min(40vh, calc(100vh - 120px))"
-        : "";
-    });
-  }
-
   function updateBanner() {
     // Prefer the sink's LLM-decided title/symbol; fall back to the tab title
     // (raw session title) and the registry/hash symbol when the sink has no
@@ -903,17 +873,12 @@
     const statusAwaiting =
       !!(streamSummary && streamSummary.awaiting) && !optimisticPending();
     const costText = bannerCost();
-    // The expanded row is an index into `messages`; if the list shrank (or
-    // vanished) since it was expanded, drop back to the normal view.
-    if (expandedMsgIdx >= messages.length) expandedMsgIdx = -1;
-    // Status is appended LAST so the expansion click handler's key-patching
-    // regex (anchored at the front) keeps working.
     const state =
-      (bannerHidden ? "H|" : "S|") + expandedMsgIdx + "|" +
+      (bannerHidden ? "H|" : "S|") +
       symbol + "|" + title + "|" + (costText || "") + "|" +
       [...prs.keys()].join(",") + "|" +
-      messages.map((m) => m[0] + m[1]).join("|") + "|" +
-      (statusAwaiting ? "A" : "-") + (statusText || "");
+      messages.map((m) => m.icon + (m.older ? "~" : "") + m.text).join("|") +
+      "|" + (statusAwaiting ? "A" : "-") + (statusText || "");
     let banner = document.getElementById("wc-banner");
     // The status line updates IN PLACE on every pass (cheap text patch), so
     // it stays near-realtime even when the full rebuild below is skipped
@@ -1040,9 +1005,12 @@
     }
 
     // Recent chat messages (from the devin-stream captured-API summary):
-    // the last 4 human/agent CHAT messages in conversation order
-    // (reasoning/tool events are excluded sink-side). Rendered below the PR
-    // list, set off by a separator line.
+    // the newest 4 human/agent CHAT messages, NEWEST AT THE TOP, each shown
+    // in full (reasoning/tool events are excluded sink-side). Rendered
+    // below the PR list, set off by a separator line. No per-row clamps and
+    // no click-to-expand: the container itself scrolls once the banner hits
+    // its viewport cap, and newest-at-top keeps the interesting content
+    // visible when it overflows (scroll down for older).
     if (messages.length) {
       const msgs = document.createElement("div");
       msgs.id = "wc-banner-msgs";
@@ -1057,32 +1025,18 @@
       msgs.style.minHeight = "0";
       msgs.style.overflowY = "auto";
       msgs.style.pointerEvents = "auto";
-      messages.forEach(([icon, text], idx) => {
+      for (const m of messages) {
         const row = document.createElement("div");
-        row.className = "wc-banner-msg";
-        row.title = "Click to expand/collapse this message";
-        // 15-line budget across rows, biggest clamp on the newest message;
-        // applyMsgExpansion applies it inline (and lifts it while expanded).
-        row.dataset.wcClamp = String(msgLineClamp(idx, messages.length));
-        renderMsgText(row, icon + " " + text);
-        row.addEventListener("click", (e) => {
-          // Links inside rows must still navigate, not toggle expansion.
-          if (e.target && e.target.closest && e.target.closest("a")) return;
-          e.stopPropagation();
-          expandedMsgIdx = expandedMsgIdx === idx ? -1 : idx;
-          applyMsgExpansion();
-          // Keep the render-state key in sync so the next 15s tick doesn't
-          // see a "changed" state and rebuild the banner just for this (a
-          // rebuild would also be skipped while the reply input holds text,
-          // which is exactly why expansion is applied in place).
-          lastBannerState = lastBannerState.replace(
-            /^([HS]\|)-?\d+\|/, "$1" + expandedMsgIdx + "|");
-        });
+        row.className = "wc-banner-msg" + (m.older ? " wc-msg-older" : "");
+        if (m.older) {
+          row.title = "Older context: the latest human message " +
+            "(fell outside the newest 4)";
+        }
+        renderMsgText(row, m.icon + " " + m.text);
         msgs.appendChild(row);
-      });
+      }
       banner.appendChild(msgs);
     }
-    applyMsgExpansion(banner);
 
     // Reply input: always the SAME node (see getReplyInput), re-attached to
     // each rebuilt banner so any typed-but-unsent text is never discarded.
@@ -1237,7 +1191,7 @@
     const top = topPx + "px";
     if (banner.style.top !== top) banner.style.top = top;
     // Mirror the offset into a viewport height cap so the banner can never
-    // run off the bottom of the window (worst case: many PRs + 6 message
+    // run off the bottom of the window (worst case: many PRs + unclamped message
     // rows in a short tiled window pushed the collapse toggle and reply
     // input off-screen). calc(100vh - ...) tracks window resizes for free.
     // The banner is a flex column where ONLY the message list shrinks and

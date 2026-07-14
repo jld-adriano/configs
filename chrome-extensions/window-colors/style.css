@@ -186,8 +186,12 @@
   opacity: 1;
 }
 
-/* Recent chat messages (from the devin-stream summary; last 6 back-and-forth
-   human/agent messages), shown below the PR list behind a separator line */
+/* Recent chat messages (from the devin-stream summary): the newest 4
+   human/agent messages, NEWEST AT THE TOP, each shown in full (no line
+   clamps), below the PR list behind a separator line. The container is the
+   banner's flex scroller: it grows until the banner hits its viewport
+   max-height, then scrolls -- newest-at-top keeps the interesting content
+   visible when it overflows. */
 #wc-banner-msgs {
   /* compact separator: 3+1+3 = 7px total (was 10+5+10 = 25px originally) */
   margin-top: 3px;
@@ -214,51 +218,21 @@
   /* long unbroken tokens (URLs, hashes) must wrap, never widen the banner */
   overflow-wrap: anywhere;
   word-break: break-word;
-  /* Fallback clamp only: content.js sets a per-row INLINE clamp, top-heavy
-     toward the newest messages (newest 10 lines, second 3, older rows 1-line
-     crumbs; see MSG_LINE_ALLOC / applyMsgExpansion). */
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  /* rows are clickable (click-to-expand); the banner is pointer-events:none */
+  /* no per-row clamp or click-to-expand: rows show their full text and the
+     CONTAINER (#wc-banner-msgs) scrolls; links inside rows stay clickable
+     (the banner root is pointer-events:none) */
   pointer-events: auto;
-  cursor: pointer;
 }
 
 .wc-banner-msg:last-child { margin-bottom: 0; }
 
-/* Click-to-expand: the clicked row loses its line clamp and can scroll;
-   while one row is expanded the banner hides the other rows and the PR row
-   so the full message gets the whole content area. Click again to reset. */
-.wc-banner-msg.wc-msg-expanded {
-  display: block;
-  -webkit-line-clamp: unset;
-  /* Viewport-aware: 40vh normally, but never more than the viewport minus
-     the banner's fixed rows (title + status + reply input + awaiting line),
-     so expanding a message can't push the input off a short window. */
-  max-height: min(40vh, calc(100vh - 120px));
-  overflow-y: auto;
-}
-
-#wc-banner.wc-msg-expanded-mode #wc-banner-prs,
-#wc-banner.wc-msg-expanded-mode .wc-banner-msg:not(.wc-msg-expanded) {
-  display: none;
-}
-
-/* While a row is expanded, exactly ONE scrollbar: the row's. The messages
-   container stops scrolling and instead sizes the row (flex column +
-   min-height:0), so the row's own 40vh/overflow scroll region is never
-   double-clipped by a scrolling parent. */
-#wc-banner.wc-msg-expanded-mode #wc-banner-msgs {
-  display: flex;
-  flex-direction: column;
-  overflow-y: hidden;
-}
-
-.wc-banner-msg.wc-msg-expanded {
-  flex: 1 1 auto;
-  min-height: 0;
+/* Appended latest-human-message context row: when the newest 4 are all
+   agent messages, the latest human turn is appended at the bottom, dimmed
+   to read as older context (see content.js bannerMessages). */
+.wc-banner-msg.wc-msg-older {
+  opacity: 0.55;
+  border-top: 1px dotted var(--wc-separator, rgba(255, 255, 255, 0.35));
+  padding-top: 2px;
 }
 
 /* Links parsed out of message text: short clickable labels, styled like the
