@@ -14,9 +14,12 @@
   const HEARTBEAT_INTERVAL_MS = 30 * 1000;
   // Visible Devin tabs poll the (background-cached, local) sink summary on a
   // fast cadence so the banner's status line tracks what Devin is doing in
-  // near-realtime. Hidden tabs stay on the 30s heartbeat cadence -- dozens of
-  // background tabs must not multiply load, and nobody can see them anyway.
-  const SUMMARY_FAST_INTERVAL_MS = 8 * 1000;
+  // near-realtime. The background worker's cache TTL is 2s (see its
+  // STREAM_SUMMARY_TTL_MS), so this interval is the effective worst-case
+  // latency (~5-7s) instead of the two stacking (~16s at the old 8s+8s).
+  // Hidden tabs stay on the 30s heartbeat cadence -- dozens of background
+  // tabs must not multiply load, and nobody can see them anyway.
+  const SUMMARY_FAST_INTERVAL_MS = 5 * 1000;
 
   function hashToHSL(str) {
     let hash = 0;
@@ -373,6 +376,39 @@
   // heartbeat cadence.
   let streamSummary = null;
 
+  // ── Optimistic send ───────────────────────────────────────────────────────
+  // The message the user just submitted through the banner reply input,
+  // rendered IMMEDIATELY (plus a "sending…" status) instead of waiting for
+  // the capture -> sink -> summary round-trip (ws-send capture flushes in
+  // ~1.5s, the summary poll adds up to ~7s). Reconciled automatically: it is
+  // dropped as soon as the sink's recentMessages carries the same text
+  // (normalized compare, mirroring the sink's near-dup guard), and expires
+  // after OPTIMISTIC_TTL_MS as a failsafe (send never went through, tab not
+  // on the live-capture path, sink down).
+  const OPTIMISTIC_TTL_MS = 30 * 1000;
+  let optimisticSend = null; // { text, at }
+
+  function normMsgText(s) {
+    return String(s || "").split(/\s+/).join(" ").toLowerCase().slice(0, 500);
+  }
+
+  function optimisticPending() {
+    if (!optimisticSend) return false;
+    if (Date.now() - optimisticSend.at > OPTIMISTIC_TTL_MS) {
+      optimisticSend = null;
+      return false;
+    }
+    const norm = normMsgText(optimisticSend.text);
+    const recent = (streamSummary && streamSummary.recentMessages) || [];
+    for (const m of recent) {
+      if (m && m.role === "human" && normMsgText(m.text) === norm) {
+        optimisticSend = null; // sink caught up; its copy takes over
+        return false;
+      }
+    }
+    return true;
+  }
+
   function refreshStreamSummary() {
     if (!isDevinSession()) return;
     try {
@@ -499,20 +535,23 @@
   const MAX_MSGS = 6;
 
   function bannerMessages() {
-    if (!streamSummary) return [];
-    if (Array.isArray(streamSummary.recentMessages) &&
+    let out = [];
+    if (streamSummary &&
+        Array.isArray(streamSummary.recentMessages) &&
         streamSummary.recentMessages.length) {
-      return streamSummary.recentMessages
+      out = streamSummary.recentMessages
         .filter((m) => m && m.text)
-        .slice(-MAX_MSGS)
         .map((m) => [m.role === "human" ? "👤" : "🤖", m.text]);
+    } else if (streamSummary) {
+      if (streamSummary.lastHumanMessage)
+        out.push(["👤", streamSummary.lastHumanMessage]);
+      if (streamSummary.lastAgentMessage)
+        out.push(["🤖", streamSummary.lastAgentMessage]);
     }
-    const out = [];
-    if (streamSummary.lastHumanMessage)
-      out.push(["👤", streamSummary.lastHumanMessage]);
-    if (streamSummary.lastAgentMessage)
-      out.push(["🤖", streamSummary.lastAgentMessage]);
-    return out;
+    // The just-sent banner reply renders as the newest human turn until the
+    // sink's copy arrives (optimisticPending clears itself on reconcile).
+    if (optimisticPending()) out.push(["👤", optimisticSend.text]);
+    return out.slice(-MAX_MSGS);
   }
 
   // Adaptive per-row line budget, heavily top-heavy (13-line total budget):
@@ -535,6 +574,9 @@
   // ("running") when no message was captured. Rendered as a small dimmed row
   // just above the reply input.
   function bannerStatus() {
+    // A just-sent reply overrides whatever (now stale) status the sink last
+    // captured, until the sink observes the message and moves on itself.
+    if (optimisticPending()) return "sending…";
     if (!streamSummary) return null;
     const t = streamSummary.statusMessage || streamSummary.statusEnum ||
       streamSummary.status;
@@ -714,6 +756,27 @@
     return null;
   }
 
+  // In-place optimistic render: updateBanner defers full rebuilds while the
+  // reply input is focused (which it is, right after sending), so the new
+  // message row and the "sending…" status are patched into the existing
+  // banner directly. The next full rebuild reproduces both from
+  // bannerMessages()/bannerStatus() until the sink catches up. No new
+  // scanning: this touches only our own banner nodes, once per user send.
+  function renderOptimisticSend(text) {
+    const banner = document.getElementById("wc-banner");
+    if (!banner) return;
+    patchStatusRow(banner, "sending…", false);
+    const msgs = banner.querySelector("#wc-banner-msgs");
+    if (!msgs) return; // no transcript container yet; next rebuild shows it
+    const row = document.createElement("div");
+    row.className = "wc-banner-msg";
+    row.dataset.wcClamp = "3";
+    row.style.webkitLineClamp = "3";
+    renderMsgText(row, "👤 " + text);
+    msgs.appendChild(row);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
   function sendReply(text) {
     const target = findDevinChatInput();
     if (!target) {
@@ -743,6 +806,8 @@
       }, 200);
       replyInput.value = "";
       replyInput.focus();
+      optimisticSend = { text, at: Date.now() };
+      renderOptimisticSend(text);
     } catch (e) {
       flashReplyError("Send failed: " + e);
     }
@@ -833,7 +898,10 @@
     const prs = collectPRs();
     const messages = bannerMessages();
     const statusText = bannerStatus();
-    const statusAwaiting = !!(streamSummary && streamSummary.awaiting);
+    // A pending optimistic send means the user just replied: the sink's
+    // awaiting flag is stale by definition, so render the working state.
+    const statusAwaiting =
+      !!(streamSummary && streamSummary.awaiting) && !optimisticPending();
     const costText = bannerCost();
     // The expanded row is an index into `messages`; if the list shrank (or
     // vanished) since it was expanded, drop back to the normal view.
