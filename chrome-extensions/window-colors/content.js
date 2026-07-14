@@ -530,7 +530,7 @@
   // viewport height cap, and with newest-at-top the interesting content is
   // what's visible). Falls back to the older two-field summary shape when
   // recentMessages is absent.
-  const MAX_MSGS = 4;
+  const MAX_MSGS = 6;
 
   function bannerMessages() {
     // Rows are {icon, text, older}; `older` marks the appended
@@ -1030,7 +1030,7 @@
         row.className = "wc-banner-msg" + (m.older ? " wc-msg-older" : "");
         if (m.older) {
           row.title = "Older context: the latest human message " +
-            "(fell outside the newest 4)";
+            "(fell outside the newest 6)";
         }
         renderMsgText(row, m.icon + " " + m.text);
         msgs.appendChild(row);
