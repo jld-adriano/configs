@@ -128,12 +128,13 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 48292
 STATE_DIR = os.path.expanduser("~/.local/state/devin-stream")
@@ -142,6 +143,11 @@ LOG_FILE = os.path.join(STATE_DIR, "events.jsonl")
 LATEST_FILE = os.path.join(STATE_DIR, "latest.json")
 MAX_LOG_BYTES = 50 * 1024 * 1024
 MAX_SESSION_LOG_BYTES = 10 * 1024 * 1024
+# Reject absurd ingest bodies before buffering them: with concurrent handler
+# threads, N simultaneous huge POSTs would hold N bodies in memory at once.
+# Real traffic tops out around 5MB (the extension's backfill batches), so
+# 32MB is pure headroom.
+MAX_BODY_BYTES = 32 * 1024 * 1024
 
 # Filesystem-safe session id: Devin session ids are uuids, but be defensive so a
 # malformed id can never escape the sessions/ directory.
@@ -152,16 +158,26 @@ SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]")
 # captured Devin API payloads (see module docstring for the payload paths).
 STATE = {"sessions": {}, "discovery": None, "summary": {}, "updatedAt": None}
 
-# Threading model: the HTTP server is a plain single-threaded HTTPServer
-# (one request at a time, on the main thread), so EXACTLY TWO threads touch
-# STATE: the request-handler thread (POST /ingest folds captures; GETs
-# serialize summaries) and the LLM enrichment daemon thread. Serializing or
-# iterating a dict while the other thread inserts keys raises RuntimeError
-# ("dictionary changed size during iteration") and can produce torn reads,
-# hence one RLock guarding every STATE mutation and every read that
-# iterates/serializes it. Hold times stay short: snapshot/serialize under
-# the lock, do network and slow I/O outside; never held across LLM calls.
+# Threading model: the HTTP server is a ThreadingHTTPServer (one daemon
+# thread per request), so MANY threads touch STATE concurrently: any number
+# of request-handler threads (POST /ingest folds captures; GETs serialize
+# summaries) plus the LLM enrichment daemon thread. Serializing or iterating
+# a dict while another thread inserts keys raises RuntimeError ("dictionary
+# changed size during iteration") and can produce torn reads, hence one
+# RLock guarding every STATE mutation and every read that iterates/
+# serializes it. Hold times stay short: snapshot/serialize under the lock,
+# do network, disk and socket I/O outside; never held across LLM calls.
 STATE_LOCK = threading.RLock()
+
+# Disk-append lock for the line-oriented jsonl logs (events.jsonl and the
+# per-session sessions/<id>.jsonl). Appends happen OUTSIDE STATE_LOCK, so
+# with concurrent handler threads two writers can hit the same file at once;
+# Python's buffered file object splits a line bigger than its buffer (~8KB,
+# and captured bodies run to MBs) across multiple write() syscalls, which
+# interleaves and tears records. One lock covers rotation + append for all
+# jsonl logs: local-disk appends are quick, and a single writer at a time is
+# what the disk serializes to anyway. Never held together with STATE_LOCK.
+FILE_IO_LOCK = threading.Lock()
 
 
 def _rotate(path, limit):
@@ -1033,7 +1049,11 @@ EMOJI_SHORTCODES = {
 
 
 def _log(msg):
-    print(time.strftime("%Y-%m-%dT%H:%M:%S%z") + " " + msg, flush=True)
+    # One write() call per line: print() can split text and "\n" into
+    # separate writes, which interleaves when handler threads log
+    # concurrently. Single short writes are atomic enough for a log file.
+    sys.stdout.write(time.strftime("%Y-%m-%dT%H:%M:%S%z") + " " + msg + "\n")
+    sys.stdout.flush()
 
 
 def _resolve_openai_key():
@@ -1078,6 +1098,10 @@ def _load_llm_cache():
 
 
 def _save_llm_cache(cache):
+    # Single-writer file: only the LLM daemon thread ever loads, mutates or
+    # saves the cache (request threads never touch it), so the shared ".tmp"
+    # temp name is race-free -- unlike latest.json, which any handler thread
+    # can write and therefore needs the unique-temp scheme.
     if len(cache) > LLM_CACHE_MAX:  # drop the oldest decisions
         for ck in sorted(cache, key=lambda k: str(cache[k].get("decidedAt")))[
                 :len(cache) - LLM_CACHE_MAX]:
@@ -1185,7 +1209,7 @@ def _llm_cycle(cache, api_key):
     their CURRENT raw title (new sessions or renamed ones), freshest first.
     """
     # Deep-copy the fields this cycle needs while holding the lock: the
-    # handler thread mutates these summary dicts (and re-sorts their
+    # handler threads mutate these summary dicts (and re-sort their
     # recentMessages lists) concurrently, so live references must not be
     # read outside the lock. The snapshot keeps the lock hold short and the
     # LLM network calls entirely lock-free.
@@ -1298,9 +1322,10 @@ def _log_session(record):
     if sid is None:
         return
     path = os.path.join(SESSIONS_DIR, sid + ".jsonl")
-    _rotate(path, MAX_SESSION_LOG_BYTES)
-    with open(path, "a") as f:
-        f.write(json.dumps(record, default=str) + "\n")
+    with FILE_IO_LOCK:
+        _rotate(path, MAX_SESSION_LOG_BYTES)
+        with open(path, "a") as f:
+            f.write(json.dumps(record, default=str) + "\n")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1327,6 +1352,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._respond(404, {"error": "unknown path"})
         try:
             length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._respond(400, {"error": "bad length"})
+        # Cap the buffered body: with concurrent handler threads, N huge
+        # POSTs would otherwise balloon memory N-fold before json.loads
+        # even runs (real batches top out ~5MB; see MAX_BODY_BYTES).
+        if length > MAX_BODY_BYTES:
+            return self._respond(413, {"error": "body too large"})
+        try:
             payload = json.loads(self.rfile.read(length))
         except (ValueError, json.JSONDecodeError):
             return self._respond(400, {"error": "bad json"})
@@ -1336,21 +1369,27 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(events, list):
             events = [payload]
 
-        # File I/O (event log, per-session logs) runs unlocked; only the
-        # STATE folds need the lock, and they're pure in-memory dict work,
-        # so the LLM thread is never blocked behind disk writes.
+        # File I/O (event log, per-session logs) runs outside STATE_LOCK
+        # under its own FILE_IO_LOCK; only the STATE folds take STATE_LOCK,
+        # and they're pure in-memory dict work, so the LLM thread and other
+        # request threads are never blocked behind disk writes.
         ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        _rotate(LOG_FILE, MAX_LOG_BYTES)
         records = []
-        with open(LOG_FILE, "a") as f:
-            for ev in events:
-                if not isinstance(ev, dict):
-                    continue
-                record = {"ts": ts, **ev}
-                f.write(json.dumps(record, default=str) + "\n")
-                records.append(record)
-        with STATE_LOCK:
-            for record in records:
+        with FILE_IO_LOCK:
+            _rotate(LOG_FILE, MAX_LOG_BYTES)
+            with open(LOG_FILE, "a") as f:
+                for ev in events:
+                    if not isinstance(ev, dict):
+                        continue
+                    record = {"ts": ts, **ev}
+                    f.write(json.dumps(record, default=str) + "\n")
+                    records.append(record)
+        # Lock PER RECORD, not across the whole batch: each envelope folds
+        # independently, and a multi-hundred-record backfill batch folded
+        # under one hold would stall concurrent GETs for the whole fold --
+        # exactly the /state latency the threaded server exists to fix.
+        for record in records:
+            with STATE_LOCK:
                 _apply(record)
         for record in records:
             _log_session(record)
@@ -1359,9 +1398,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         # SERIALIZE under the lock (json.dumps iterates STATE, and the
-        # ingest fold / LLM thread insert keys concurrently -- "dictionary
+        # ingest folds / LLM thread insert keys concurrently -- "dictionary
         # changed size during iteration"), but write to the SOCKET outside
-        # it, so a slow client can never stall the other thread.
+        # it, so a slow client can never stall the other threads.
         if self.path.startswith("/state"):
             with STATE_LOCK:
                 data = json.dumps(STATE, default=str).encode()
@@ -1412,11 +1451,17 @@ def main():
         _derive_awaiting(_summary_for(sid))
     _backfill_summary()
     threading.Thread(target=_llm_loop, name="llm-enrich", daemon=True).start()
-    # Deliberately the plain single-threaded HTTPServer: requests are
-    # handled one at a time on this thread, so STATE is only ever contended
-    # between the handler thread and the LLM daemon thread (see STATE_LOCK).
-    # Do not swap in ThreadingHTTPServer without re-auditing the locking.
-    HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    # ThreadingHTTPServer: one daemon thread per request, so a slow request
+    # (multi-MB backfill POST fold, a slow-reading client) no longer queues
+    # every other request behind it (observed: /state timing out 10-20s
+    # while a fold ran under the old single-threaded HTTPServer). Safe
+    # because every STATE access is under STATE_LOCK and every jsonl append
+    # under FILE_IO_LOCK (see both locks' comments); latest.json uses
+    # unique-temp + os.replace. daemon_threads so stuck client sockets can
+    # never block process exit/restart.
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    server.daemon_threads = True
+    server.serve_forever()
 
 
 if __name__ == "__main__":
