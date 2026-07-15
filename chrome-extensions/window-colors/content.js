@@ -369,6 +369,7 @@
   // worker fetches and caches it; we ask for our session's slice on the
   // heartbeat cadence.
   let streamSummary = null;
+  const STREAM_SUMMARY_MAX_STALE_MS = 2 * 60 * 1000;
 
   // ── Optimistic send ───────────────────────────────────────────────────────
   // The message the user just submitted through the banner reply input,
@@ -412,6 +413,12 @@
           if (chrome.runtime.lastError || !resp) return; // extension reloading
           if (resp.ok) {
             streamSummary = resp.summary || null;
+            tick();
+          } else if (resp.cacheAgeMs == null ||
+                     resp.cacheAgeMs > STREAM_SUMMARY_MAX_STALE_MS) {
+            // Do not leave a once-good summary pinned in the banner forever
+            // after the local sink becomes unreachable.
+            streamSummary = null;
             tick();
           }
         }

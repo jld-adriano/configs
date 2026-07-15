@@ -100,12 +100,16 @@ const STREAM_SUMMARY_URL = "http://127.0.0.1:48292/summary";
 // stay on the 30s heartbeat cadence, so total load stays trivial (local
 // endpoint, one small fetch).
 const STREAM_SUMMARY_TTL_MS = 2 * 1000;
-let streamSummaryCache = { sessions: {}, fetchedAt: 0 };
+const STREAM_SUMMARY_MAX_STALE_MS = 2 * 60 * 1000;
+let streamSummaryCache = {
+  sessions: {}, fetchedAt: 0, lastAttemptAt: 0, lastFetchOk: false,
+};
 
 async function getStreamSummary() {
   if (Date.now() - streamSummaryCache.fetchedAt < STREAM_SUMMARY_TTL_MS) {
     return streamSummaryCache.sessions;
   }
+  streamSummaryCache.lastAttemptAt = Date.now();
   try {
     const res = await fetch(STREAM_SUMMARY_URL);
     if (res.ok) {
@@ -113,10 +117,21 @@ async function getStreamSummary() {
       streamSummaryCache = {
         sessions: (data && data.sessions) || {},
         fetchedAt: Date.now(),
+        lastAttemptAt: Date.now(),
+        lastFetchOk: true,
       };
+    } else {
+      streamSummaryCache.lastFetchOk = false;
     }
   } catch (e) {
-    // sink not running; serve the stale cache (or {})
+    streamSummaryCache.lastFetchOk = false;
+  }
+  // A transient failure may briefly serve the last good snapshot, but never
+  // retain it indefinitely: consumers get explicit age/health metadata and
+  // the payload is discarded after this bounded grace period.
+  if (!streamSummaryCache.lastFetchOk &&
+      Date.now() - streamSummaryCache.fetchedAt > STREAM_SUMMARY_MAX_STALE_MS) {
+    streamSummaryCache.sessions = {};
   }
   return streamSummaryCache.sessions;
 }
@@ -127,7 +142,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // ok distinguishes "sink answered, session unknown" (fallback sources
       // may be trusted) from "sink unreachable" (content fails closed).
       sendResponse({
-        ok: streamSummaryCache.fetchedAt > 0,
+        ok: streamSummaryCache.lastFetchOk,
+        fetchedAt: streamSummaryCache.fetchedAt || null,
+        cacheAgeMs: streamSummaryCache.fetchedAt
+          ? Date.now() - streamSummaryCache.fetchedAt
+          : null,
         summary: (msg.sessionId && sessions[msg.sessionId]) || null,
       });
     });
