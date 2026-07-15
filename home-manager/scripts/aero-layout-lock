@@ -13,6 +13,8 @@ Each lock also archives a timestamped copy of the full snapshot under
 Env options (both unset for the manual alt-shift-s binding):
   AERO_LOCK_NO_SHOTS=1    skip per-window screenshots (fast, no screen flashes;
                           used by the periodic launchd autolock)
+  AERO_LOCK_NO_ORDER=1    skip focus-based left-to-right order capture (used
+                          by periodic autolock so it never steals focus)
   AERO_LOCK_LABEL=<str>   tag the snapshot: the label lands in the archive
                           filename (layout-<label>-<stamp>.json) and in the
                           lock-log row, so aero-layout-apply's picker can tell
@@ -30,6 +32,13 @@ HISTORY_DIR = os.path.expanduser("~/.local/state/aerospace/history")
 LOG_FILE = os.path.expanduser("~/.local/state/aerospace/lock-log.tsv")
 
 NO_SHOTS = os.environ.get("AERO_LOCK_NO_SHOTS", "") not in ("", "0")
+NO_ORDER = (
+    os.environ.get("AERO_LOCK_NO_ORDER", "") not in ("", "0")
+    # Backward-compatible safety: existing deployed auto-lock agents already
+    # set this label/no-shots pair, so they stop stealing focus immediately
+    # without waiting for a Home Manager reload to add the new env variable.
+    or (NO_SHOTS and os.environ.get("AERO_LOCK_LABEL", "") == "auto")
+)
 # filename-safe; aero-layout-apply parses it out of layout-<label>-<stamp>.json
 LABEL = re.sub(r"[^A-Za-z0-9._-]", "", os.environ.get("AERO_LOCK_LABEL", ""))
 
@@ -386,7 +395,14 @@ def main():
             w["screenshot"] = None
     else:
         shot_count = capture_screenshots(windows, now)  # records w["screenshot"]
-    capture_order(windows)  # records w["x"] for windows in multi-window workspaces
+    if NO_ORDER:
+        # Workspace placement and Chrome tab data remain fully restorable.
+        # Only visual left-to-right ordering is omitted; apply treats x=None
+        # as "no ordering constraint".
+        for w in windows:
+            w["x"] = None
+    else:
+        capture_order(windows)  # records x; focuses windows, then restores focus
 
     snap = {
         "locked_at": now.isoformat(),
