@@ -7,7 +7,10 @@
 // Captured payloads are truncated and handed to the ISOLATED content script via
 // window.postMessage; it relays them to the background worker and on to the sink.
 //
-// This script only observes -- it never blocks, rewrites, or delays traffic.
+// In addition to observing, this script exposes one narrowly-scoped command:
+// window-colors may ask it to send an exact user_message through the OPEN live
+// socket for the session currently shown in this tab. Socket/token details
+// never leave MAIN world.
 
 (function () {
   // A permanent boolean guard wedges long-lived pages after an unpacked
@@ -15,8 +18,10 @@
   // never replace the old wrappers. Keep an explicit versioned installation
   // with a reversible cleanup instead. Existing sockets cannot be adopted
   // retroactively; background.js's history refresh repairs that gap.
-  var VERSION = "2026-07-15.1";
+  var VERSION = "2026-07-15.2";
   var TAG = "devin-stream-net";
+  var SEND_REQUEST_TAG = "window-colors-devin-send-v1";
+  var SEND_RESPONSE_TAG = "window-colors-devin-send-result-v1";
   var previous = window.__devinStreamNetState;
   if (previous && previous.version === VERSION) {
     try {
@@ -33,7 +38,20 @@
   if (previous && typeof previous.cleanup === "function") {
     try { previous.cleanup(); } catch (e) {}
   }
-  var state = { version: VERSION };
+  // Newer builds retain socket references across extension reinjection. The
+  // first upgrade from a build that did not retain them still needs one page
+  // reload so WrappedWS can observe the socket as it is constructed.
+  var inheritedSockets = previous && Array.isArray(previous.sockets)
+    ? previous.sockets : [];
+  var inheritedResults = previous && previous.sendResults
+    ? previous.sendResults : {};
+  var state = {
+    version: VERSION,
+    sockets: inheritedSockets,
+    sendResults: inheritedResults,
+    sendResultOrder: previous && Array.isArray(previous.sendResultOrder)
+      ? previous.sendResultOrder : [],
+  };
   window.__devinStreamNetState = state;
   window.__devinStreamNet = VERSION; // compatibility/diagnostics
 
@@ -51,6 +69,153 @@
     if (typeof s !== "string") return s;
     return s.length > MAX_BODY ? s.slice(0, MAX_BODY) + "\u2026[+" + (s.length - MAX_BODY) + "]" : s;
   }
+
+  function currentSessionId() {
+    var m = window.location.href.match(
+      /app\.devin\.ai\/sessions\/([a-f0-9]{8,})/i);
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  function socketSessionId(url) {
+    var m = String(url || "").match(
+      /\/api\/events\/devin-([a-f0-9]{8,})\/live(?:[/?]|$)/i);
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  function eventId() {
+    var id = "";
+    try {
+      if (crypto && typeof crypto.randomUUID === "function") {
+        id = crypto.randomUUID().replace(/-/g, "");
+      } else if (crypto && typeof crypto.getRandomValues === "function") {
+        var bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        for (var i = 0; i < bytes.length; i++) {
+          id += bytes[i].toString(16).padStart(2, "0");
+        }
+      }
+    } catch (e) {}
+    if (!/^[a-f0-9]{32}$/i.test(id)) {
+      id = Date.now().toString(16).padStart(12, "0") +
+        Math.random().toString(16).slice(2).padEnd(20, "0").slice(0, 20);
+    }
+    return "event-" + id.slice(0, 32);
+  }
+
+  function sendResult(requestId, result) {
+    try {
+      window.postMessage(Object.assign({
+        __wcDevinSendResult: SEND_RESPONSE_TAG,
+        requestId: requestId,
+      }, result), window.location.origin);
+    } catch (e) {}
+  }
+
+  function rememberSendResult(requestId, result) {
+    if (!requestId) return;
+    state.sendResults[requestId] = result;
+    state.sendResultOrder.push(requestId);
+    while (state.sendResultOrder.length > 100) {
+      delete state.sendResults[state.sendResultOrder.shift()];
+    }
+  }
+
+  function noteSendDiagnostic(data) {
+    post(Object.assign({
+      channel: "send-diagnostic",
+      source: "window-colors",
+      at: new Date().toISOString(),
+    }, data));
+  }
+
+  function onSafeSendRequest(ev) {
+    if (ev.source !== window) return;
+    var req = ev.data;
+    if (!req || req.__wcDevinSendRequest !== SEND_REQUEST_TAG) return;
+    var requestId = typeof req.requestId === "string"
+      ? req.requestId.slice(0, 120) : "";
+    var sid = typeof req.sessionId === "string"
+      ? req.sessionId.toLowerCase() : "";
+    var message = req.message;
+    var baseDiag = {
+      requestId: requestId,
+      sessionId: sid || null,
+      intendedLength: typeof message === "string" ? message.length : null,
+      strategy: "matching-open-websocket",
+      domComposerTouched: false,
+    };
+    if (requestId && state.sendResults[requestId]) {
+      noteSendDiagnostic(Object.assign({}, baseDiag, {
+        success: true,
+        code: "duplicate-request-reconciled",
+        originalCode: state.sendResults[requestId].code,
+      }));
+      sendResult(requestId, state.sendResults[requestId]);
+      return;
+    }
+    function fail(code, error) {
+      noteSendDiagnostic(Object.assign({}, baseDiag, {
+        success: false, code: code, error: error,
+      }));
+      sendResult(requestId, { ok: false, code: code, error: error });
+    }
+    if (!requestId || !/^[a-f0-9]{8,}$/i.test(sid) ||
+        typeof message !== "string" || !message.trim() ||
+        message.length > 200000) {
+      fail("invalid-request", "Invalid safe-send request");
+      return;
+    }
+    if (currentSessionId() !== sid) {
+      fail("session-mismatch", "Tab is no longer on the requested session");
+      return;
+    }
+    var openState = RealWS && typeof RealWS.OPEN === "number"
+      ? RealWS.OPEN : 1;
+    var matches = state.sockets.filter(function (entry) {
+      return entry && entry.socket &&
+        socketSessionId(entry.url) === sid &&
+        entry.socket.readyState === openState;
+    });
+    if (!matches.length) {
+      fail("no-open-socket",
+        "No matching open Devin live socket; reload this tab to enable safe send");
+      return;
+    }
+    var chosen = matches[matches.length - 1];
+    var eid = eventId();
+    var frame = {
+      type: "user_message",
+      message: message,
+      origin: "web",
+      ensure_awake: true,
+      event_id: eid,
+      rich_content: [{ text: message }],
+    };
+    var wire = JSON.stringify(frame);
+    try {
+      chosen.socket.send(wire);
+      noteSendDiagnostic(Object.assign({}, baseDiag, {
+        success: true,
+        code: "sent",
+        eventId: eid,
+        wireLength: wire.length,
+        socketReadyState: chosen.socket.readyState,
+      }));
+      var successResult = {
+        ok: true,
+        code: "sent",
+        eventId: eid,
+        messageLength: message.length,
+        wireLength: wire.length,
+      };
+      rememberSendResult(requestId, successResult);
+      sendResult(requestId, successResult);
+    } catch (e) {
+      fail("socket-send-error", String(e));
+    }
+  }
+
+  window.addEventListener("message", onSafeSendRequest);
 
   // Remember the exact v2sessions list request the app itself last made -- URL
   // AND request headers -- so the active poller (background.js -> executeScript)
@@ -246,6 +411,16 @@
       var ws = protocols !== undefined ? new RealWS(url, protocols) : new RealWS(url);
       var track = interesting(url) || /devin/i.test(String(url));
       if (track) {
+        state.sockets.push({
+          socket: ws, url: String(url), createdAt: Date.now(),
+        });
+        // Bound stale references without risking removal of active sockets.
+        if (state.sockets.length > 100) {
+          state.sockets = state.sockets.filter(function (entry) {
+            return entry && entry.socket &&
+              entry.socket.readyState !== RealWS.CLOSED;
+          }).slice(-100);
+        }
         post({ channel: "ws", event: "open", url: String(url) });
         ws.addEventListener("message", function (ev) {
           var d = ev.data;
@@ -300,6 +475,7 @@
 
   state.cleanup = function () {
     try {
+      window.removeEventListener("message", onSafeSendRequest);
       if (state.wrappedFetch && window.fetch === state.wrappedFetch) {
         window.fetch = state.realFetch;
       }

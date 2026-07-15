@@ -138,6 +138,7 @@
 #wc-banner.wc-collapsed #wc-banner-prs,
 #wc-banner.wc-collapsed #wc-banner-msgs,
 #wc-banner.wc-collapsed #wc-banner-status,
+#wc-banner.wc-collapsed #wc-banner-reply-error,
 #wc-banner.wc-collapsed #wc-banner-reply {
   display: none;
 }
@@ -280,9 +281,9 @@
   color: #ff6a00;
 }
 
-/* Reply input at the bottom of the banner: forwards text into the page's
-   real chat composer on Enter. The banner is pointer-events:none, so the
-   input opts back in. Subtle glassy styling that inherits banner contrast. */
+/* Reply input at the bottom of the banner: sends through the safe MAIN-world
+   WebSocket bridge on Enter. The banner is pointer-events:none, so the input
+   opts back in. Subtle glassy styling that inherits banner contrast. */
 #wc-banner-reply {
   flex: 0 0 auto; /* stays reachable; only the message list shrinks */
   display: block;
@@ -311,7 +312,27 @@
   background: rgba(0, 0, 0, 0.28);
 }
 
-/* Brief error state: no chat input found on the page / send threw */
+#wc-banner-reply:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* Persistent inline send failure; the draft stays in the input so the user
+   can reload/retry without reconstructing private text. */
+#wc-banner-reply-error {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #ffddd9;
+  background: rgba(120, 0, 0, 0.7);
+  border-radius: 4px;
+  padding: 2px 6px;
+  pointer-events: auto;
+  overflow-wrap: anywhere;
+}
+
 #wc-banner-reply.wc-reply-error {
   border-color: #ff3b30;
   box-shadow: 0 0 6px rgba(255, 59, 48, 0.8);

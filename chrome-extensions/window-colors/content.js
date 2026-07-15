@@ -650,14 +650,70 @@
   }
 
   // ── Banner reply input ────────────────────────────────────────────────────
-  // A single-line input at the bottom of the banner that forwards text into
-  // the page's real chat input (Devin's main textarea/contenteditable) and
-  // submits it, as if typed there. The <input> NODE is created exactly once
+  // A single-line input at the bottom of the banner that asks devin-stream's
+  // MAIN-world bridge to send one exact user_message over this session's
+  // already-open live WebSocket. It never touches Devin's React composer.
+  // The <input> NODE is created exactly once
   // and re-attached to every rebuilt banner so in-progress text survives the
   // 15s re-render; on top of that, updateBanner() defers the rebuild entirely
   // while the input is focused or non-empty, so focus is never yanked away
   // mid-typing (re-attaching a node loses focus even though value survives).
   let replyInput = null;
+  let replySending = false;
+  const SEND_BRIDGE_REQUEST = "window-colors-devin-send-v1";
+  const SEND_BRIDGE_RESPONSE = "window-colors-devin-send-result-v1";
+  const SEND_BRIDGE_TIMEOUT_MS = 3000;
+  const MAX_SEND_DIAGNOSTICS = 12;
+  const sendDiagnostics = [];
+
+  function recordSendDiagnostic(diag) {
+    sendDiagnostics.push(diag);
+    if (sendDiagnostics.length > MAX_SEND_DIAGNOSTICS) sendDiagnostics.shift();
+    try { console.debug("[window-colors send]", diag); } catch (e) {}
+    refreshOpenDebugPanel();
+  }
+
+  async function textHash(text) {
+    try {
+      const bytes = new TextEncoder().encode(text);
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(digest)).slice(0, 8)
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch (e) {
+      // Non-cryptographic fallback is only a correlation token, never used
+      // for security. Full private text is deliberately not logged here.
+      let h = 2166136261;
+      for (let i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0).toString(16).padStart(8, "0");
+    }
+  }
+
+  function clearReplyError() {
+    if (replyInput) {
+      replyInput.classList.remove("wc-reply-error");
+      replyInput.title = "";
+    }
+    const row = document.getElementById("wc-banner-reply-error");
+    if (row) row.remove();
+  }
+
+  function showReplyError(msg) {
+    if (!replyInput) return;
+    replyInput.classList.add("wc-reply-error");
+    replyInput.title = msg;
+    const banner = document.getElementById("wc-banner");
+    if (!banner) return;
+    let row = banner.querySelector("#wc-banner-reply-error");
+    if (!row) {
+      row = document.createElement("div");
+      row.id = "wc-banner-reply-error";
+      banner.insertBefore(row, replyInput);
+    }
+    row.textContent = msg;
+  }
 
   function getReplyInput() {
     if (replyInput) return replyInput;
@@ -674,8 +730,29 @@
       // Keep banner keystrokes away from the page's global hotkey handlers.
       e.stopPropagation();
       if (e.key === "Enter") {
-        const text = replyInput.value.trim();
-        if (text) sendReply(text);
+        if (e.isComposing || e.keyCode === 229) {
+          recordSendDiagnostic({
+            at: new Date().toISOString(),
+            sessionId: getStableKey(),
+            phase: "ignored",
+            reason: "composition-active",
+            intendedLength: replyInput.value.length,
+          });
+          return;
+        }
+        e.preventDefault();
+        if (e.repeat || replySending) {
+          recordSendDiagnostic({
+            at: new Date().toISOString(),
+            sessionId: getStableKey(),
+            phase: "ignored",
+            reason: e.repeat ? "repeat-keydown" : "send-already-pending",
+            intendedLength: replyInput.value.length,
+          });
+          return;
+        }
+        const text = replyInput.value;
+        if (text.trim()) sendReply(text);
       } else if (e.key === "Escape") {
         replyInput.blur();
       }
@@ -683,97 +760,6 @@
     replyInput.addEventListener("keyup", (e) => e.stopPropagation());
     replyInput.addEventListener("keypress", (e) => e.stopPropagation());
     return replyInput;
-  }
-
-  function flashReplyError(msg) {
-    if (!replyInput) return;
-    replyInput.classList.add("wc-reply-error");
-    replyInput.title = msg;
-    setTimeout(() => {
-      if (!replyInput) return;
-      replyInput.classList.remove("wc-reply-error");
-      replyInput.title = "";
-    }, 2500);
-  }
-
-  // Locate the page's real chat input. Devin renders either a <textarea> or a
-  // contenteditable region; inspect defensively: gather every plausible
-  // editable element, drop invisible ones and our own HUD, then prefer (a) a
-  // placeholder/aria-label that smells like the chat box and (b) the one
-  // lowest on the screen (the composer sits under the transcript).
-  function findDevinChatInput() {
-    const nodes = document.querySelectorAll(
-      'textarea, [contenteditable="true"], [role="textbox"]');
-    let best = null;
-    let bestScore = -Infinity;
-    for (const el of nodes) {
-      if (el.closest("#wc-banner") || el.closest("#wc-debug-panel")) continue;
-      if (el.disabled || el.readOnly) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 80 || r.height < 14) continue;
-      if (r.bottom <= 0 || r.top >= window.innerHeight) continue;
-      const cs = getComputedStyle(el);
-      if (cs.visibility === "hidden" || cs.display === "none") continue;
-      const hint = (
-        (el.getAttribute("placeholder") || "") + " " +
-        (el.getAttribute("aria-label") || "") + " " +
-        (el.getAttribute("data-placeholder") || "")
-      ).toLowerCase();
-      let score = 0;
-      if (/devin|ask|reply|message|follow.?up|chat/.test(hint)) score += 10000;
-      score += r.top; // lower on the page wins (composer sits at the bottom)
-      score += Math.min(r.width, 800) / 100; // wider inputs are likelier
-      if (score > bestScore) {
-        bestScore = score;
-        best = el;
-      }
-    }
-    return best;
-  }
-
-  function chatInputValue(el) {
-    return el.tagName === "TEXTAREA" || el.tagName === "INPUT"
-      ? el.value
-      : el.textContent || "";
-  }
-
-  // React-controlled inputs ignore plain .value writes (React compares
-  // against its own tracked value), so go through the NATIVE prototype value
-  // setter and then dispatch a bubbling "input" event -- that is exactly what
-  // React's onChange delegation listens for. Contenteditable gets textContent
-  // + a bubbling InputEvent instead.
-  function setChatInputValue(el, text) {
-    el.focus();
-    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
-      const proto = el.tagName === "TEXTAREA"
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, text);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    } else {
-      el.textContent = text;
-      el.dispatchEvent(new InputEvent("input", {
-        bubbles: true,
-        inputType: "insertText",
-        data: text,
-      }));
-    }
-  }
-
-  // Send-button fallback: walk up from the chat input looking for a nearby
-  // button that is labelled send/submit (aria-label, text, or type=submit).
-  function findSendButton(inputEl) {
-    let scope = inputEl;
-    for (let depth = 0; depth < 6 && scope; depth++, scope = scope.parentElement) {
-      for (const b of scope.querySelectorAll('button, [role="button"]')) {
-        if (b.closest("#wc-banner")) continue;
-        const label = ((b.getAttribute("aria-label") || "") + " " +
-          (b.textContent || "")).toLowerCase();
-        if (/send|submit/.test(label)) return b;
-        if ((b.getAttribute("type") || "").toLowerCase() === "submit") return b;
-      }
-    }
-    return null;
   }
 
   // In-place optimistic render: updateBanner defers full rebuilds while the
@@ -796,40 +782,111 @@
     msgs.scrollTop = 0;
   }
 
-  function sendReply(text) {
-    const target = findDevinChatInput();
-    if (!target) {
-      flashReplyError("Devin chat input not found on this page yet");
-      return;
-    }
+  function requestSafeSend(sessionId, text, requestId) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const onResult = (ev) => {
+        if (ev.source !== window) return;
+        const d = ev.data;
+        if (!d || d.__wcDevinSendResult !== SEND_BRIDGE_RESPONSE ||
+            d.requestId !== requestId) return;
+        settled = true;
+        clearTimeout(timer);
+        window.removeEventListener("message", onResult);
+        resolve(d);
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        window.removeEventListener("message", onResult);
+        reject(new Error("Safe send bridge unavailable; reload tab to enable safe send"));
+      }, SEND_BRIDGE_TIMEOUT_MS);
+      window.addEventListener("message", onResult);
+      window.postMessage({
+        __wcDevinSendRequest: SEND_BRIDGE_REQUEST,
+        requestId,
+        sessionId,
+        message: text,
+      }, window.location.origin);
+    });
+  }
+
+  async function sendReply(text) {
+    if (replySending) return;
+    replySending = true;
+    replyInput.disabled = true;
+    clearReplyError();
+    const sessionId = getStableKey();
+    const requestId = "wc-" + (
+      crypto.randomUUID ? crypto.randomUUID() :
+        Date.now().toString(36) + "-" + Math.random().toString(36).slice(2));
+    const diag = {
+      at: new Date().toISOString(),
+      requestId,
+      sessionId,
+      intendedLength: text.length,
+      intendedUtf8Bytes: new TextEncoder().encode(text).length,
+      intendedHash: null,
+      phase: "awaiting-bridge",
+      strategy: "matching-open-websocket",
+      selectedComposer: null,
+      nativeSetterUsed: false,
+      valueLengthAfterInjection: null,
+      enterDispatched: false,
+      fallbackButtonClicked: false,
+      domComposerTouched: false,
+      observedComposerValueLengths: {
+        "50ms": null, "200ms": null, "500ms": null,
+      },
+    };
+    recordSendDiagnostic(diag);
     try {
-      setChatInputValue(target, text);
-      // Submit path 1: a synthetic Enter on the chat input (content-script
-      // events are real DOM events; React key handlers normally fire on them).
-      const key = (type) => new KeyboardEvent(type, {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-      });
-      target.dispatchEvent(key("keydown"));
-      target.dispatchEvent(key("keyup"));
-      // Submit path 2: if the composer still holds the text a beat later the
-      // Enter didn't take -- click the send button next to the input instead.
-      setTimeout(() => {
-        if (chatInputValue(target).trim() === "") return; // Enter worked
-        const btn = findSendButton(target);
-        if (btn) btn.click();
-      }, 200);
+      diag.intendedHash = await textHash(text);
+      const result = await requestSafeSend(sessionId, text, requestId);
+      diag.phase = result.ok ? "confirmed-sent" : "failed";
+      diag.success = !!result.ok;
+      diag.resultCode = result.code || null;
+      diag.eventId = result.eventId || null;
+      diag.error = result.error || null;
+      if (!result.ok) throw new Error(result.error || "Safe send failed");
+      // The input clears and optimistic row appears only after socket.send()
+      // returned successfully in MAIN world.
       replyInput.value = "";
-      replyInput.focus();
       optimisticSend = { text, at: Date.now() };
       renderOptimisticSend(text);
+      clearReplyError();
     } catch (e) {
-      flashReplyError("Send failed: " + e);
+      diag.phase = "failed";
+      diag.success = false;
+      diag.error = String(e && e.message ? e.message : e);
+      showReplyError(diag.error);
+    } finally {
+      replySending = false;
+      replyInput.disabled = false;
+      replyInput.focus();
+      refreshOpenDebugPanel();
     }
+  }
+
+  function debugPanelData() {
+    return {
+      sessionKey: getStableKey(),
+      tabReport: {
+        loaded: isDevinSession() ? devinSessionLoaded() : capyThreadLoaded(),
+        awaiting: isAwaiting(),
+        awaitSource,
+        sinkAwaitingFresh: sinkAwaitingFresh(),
+        color: currentColor(),
+        symbol: currentSymbol(),
+        ...memoryInfo(),
+      },
+      recentSendDiagnostics: sendDiagnostics,
+      sinkSummary: streamSummary,
+    };
+  }
+
+  function refreshOpenDebugPanel() {
+    const pre = document.querySelector("#wc-debug-panel pre");
+    if (pre) pre.textContent = JSON.stringify(debugPanelData(), null, 2);
   }
 
   function toggleDebugPanel() {
@@ -845,20 +902,7 @@
     close.textContent = "✕";
     close.addEventListener("click", () => panel.remove());
     const pre = document.createElement("pre");
-    const data = {
-      sessionKey: getStableKey(),
-      tabReport: {
-        loaded: isDevinSession() ? devinSessionLoaded() : capyThreadLoaded(),
-        awaiting: isAwaiting(),
-        awaitSource,
-        sinkAwaitingFresh: sinkAwaitingFresh(),
-        color: currentColor(),
-        symbol: currentSymbol(),
-        ...memoryInfo(),
-      },
-      sinkSummary: streamSummary,
-    };
-    pre.textContent = JSON.stringify(data, null, 2);
+    pre.textContent = JSON.stringify(debugPanelData(), null, 2);
     panel.appendChild(close);
     panel.appendChild(pre);
     document.documentElement.appendChild(panel);
