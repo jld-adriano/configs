@@ -34,7 +34,7 @@ events.jsonl on first start):
                           recentMessages: [{role: "human"|"agent", text, ts}]
                           (last 6 chat messages, oldest -> newest; the latest
                           HUMAN message is always represented -- see
-                          _ensure_human_recent), lastSeen,
+                          _ensure_human_recent), lastSeen, historyAt,
                           decidedTitle, symbol, symbolShortcode, decidedAt}
 
 On top of THAT, an optional LLM enrichment thread asks OpenAI (model
@@ -314,6 +314,68 @@ def _epoch(ts):
         return 0.0
 
 
+# Self-healing guard against a POISONED-FUTURE timestamp wedge: folding is
+# newest-timestamp-wins everywhere, so a single stored timestamp that parses
+# hours in the future (malformed server value, a clock-skewed source, a bad
+# capture stamp) would outrank every real message/status that follows -- and
+# persist through restarts via latest.json, so not even a page refresh could
+# un-wedge the session. Any timestamp claiming to be more than this far ahead
+# of the local clock is suspect and gets clamped.
+FUTURE_SLOP_S = 300
+
+
+def _now_ts():
+    """Capture-style timestamp: local time WITH utc offset (never naive)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _clamp_future(ts, fallback=None):
+    """Return ts unless it is >FUTURE_SLOP_S in the future; then substitute.
+
+    The substitute is `fallback` (normally the envelope's capture time) when
+    that is itself sane, else the current time -- either way the value can
+    still win over genuinely older data but can never permanently outrank
+    the real messages that keep arriving.
+    """
+    if _epoch(ts) <= time.time() + FUTURE_SLOP_S:
+        return ts
+    if fallback and _epoch(fallback) <= time.time() + FUTURE_SLOP_S:
+        return fallback
+    return _now_ts()
+
+
+# Summary fields holding a timestamp that participates in newest-wins folds.
+_SUMMARY_TS_FIELDS = ("statusAt", "statusEnumAt", "awaitingSince", "lastSeen",
+                      "lastHumanMessageAt", "lastAgentMessageAt",
+                      "prsAt", "costAt", "historyAt")
+
+
+def _heal_summary_timestamps(summ):
+    """Clamp stored future timestamps in one summary (boot-time self-heal).
+
+    Every WRITE path clamps via _clamp_future, so this only matters for
+    state persisted before the guard existed (or hand-edited latest.json):
+    without it a poisoned value would keep winning folds forever.
+    """
+    for k in _SUMMARY_TS_FIELDS:
+        v = summ.get(k)
+        if v:
+            summ[k] = _clamp_future(v)
+    resort = False
+    for m in summ.get("recentMessages") or []:
+        ts = m.get("ts")
+        if ts:
+            clamped = _clamp_future(ts)
+            if clamped != ts:
+                m["ts"] = clamped
+                resort = True
+    if resort:
+        summ["recentMessages"].sort(key=lambda m: _epoch(m.get("ts")))
+    for pr in summ.get("prs") or []:
+        if pr.get("observedAt"):
+            pr["observedAt"] = _clamp_future(pr["observedAt"])
+
+
 def _trunc_msg(text, limit=MSG_TRUNC):
     """One-line truncation for the compact last*Message summary fields:
     whitespace runs (including newlines) collapse to single spaces."""
@@ -346,6 +408,7 @@ def _summary_for(sid):
         "lastAgentMessage": None, "lastAgentMessageAt": None,
         "recentMessages": [],
         "lastSeen": None,
+        "historyAt": None, "historyVersion": None,
         "costUsd": None, "acuUsed": None, "costAt": None,
         "decidedTitle": None, "symbol": None, "symbolShortcode": None,
         "decidedAt": None,
@@ -355,6 +418,7 @@ def _summary_for(sid):
     for k in ("statusEnum", "statusEnumAt", "statusMessage", "statusAt",
               "rawTitle",
               "costUsd", "acuUsed", "costAt", "prsAt",
+              "historyAt", "historyVersion",
               "decidedTitle", "symbol", "symbolShortcode", "decidedAt"):
         summ.setdefault(k, None)
     summ.setdefault("awaiting", False)
@@ -400,7 +464,8 @@ def _note_message(summ, contents, approx=False):
     if mtype == INITIAL_HUMAN_TYPE:
         if summ["lastHumanMessage"] is None:
             summ["lastHumanMessage"] = _trunc_msg(text)
-            summ["lastHumanMessageAt"] = contents.get("timestamp")
+            summ["lastHumanMessageAt"] = _clamp_future(
+                contents.get("timestamp"))
         return
     if mtype in HUMAN_MSG_TYPES:
         key, role = "lastHumanMessage", "human"
@@ -408,7 +473,9 @@ def _note_message(summ, contents, approx=False):
         key, role = "lastAgentMessage", "agent"
     else:
         return
-    ts = contents.get("timestamp")
+    # A timestamp claiming to be far in the future would win every later
+    # fold and wedge the session on this message forever (see FUTURE_SLOP_S).
+    ts = _clamp_future(contents.get("timestamp"))
     _note_recent(summ, role, text, ts, approx=approx)
     prev_at = summ.get(key + "At")
     if _epoch(ts) >= _epoch(prev_at):
@@ -496,7 +563,7 @@ def _note_immediate_human(record, text, url):
         else _safe_session_id(record.get("sessionId"))
     if not sid:
         return
-    ts = record.get("ts")
+    ts = _clamp_future(record.get("ts"))
     summ = _summary_for(sid)
     summ["lastSeen"] = ts
     _note_message(summ, {"type": "user_message", "message": text,
@@ -633,6 +700,7 @@ def _note_status(summ, enum, message, ts):
     """
     if not enum:
         return
+    ts = _clamp_future(ts)  # a future-poisoned ts must not wedge the enum
     if _epoch(ts) >= _epoch(summ.get("statusEnumAt")):
         summ["statusEnum"] = enum
         summ["statusEnumAt"] = ts
@@ -749,6 +817,25 @@ def _iter_truncated_array(body, prefix):
             return
 
 
+def _iter_stream_events(body):
+    """Yield chat/status events from Devin's NDJSON history response.
+
+    `/api/events/.../stream` is not one JSON document: it returns many lines,
+    each shaped `{"result":[...]}`. Parsing only the first array silently
+    discarded the overwhelming majority of history (the primary test session
+    currently has 85 chunks / 307 chat messages). Each line may itself be
+    clipped by the passive interceptor, so retain the incremental-array
+    decoder rather than requiring json.loads of the whole line.
+    """
+    for line in body.splitlines():
+        for item in _iter_truncated_array(line, '{"result":['):
+            if not isinstance(item, dict):
+                continue
+            # Tolerate both observed direct event objects and an event wrapper.
+            ev = item.get("event")
+            yield ev if isinstance(ev, dict) else item
+
+
 def _fold_session_obj(obj, ts):
     """Fold one session object from v2sessions / session-detail payloads."""
     sid = _sid_from_devin_id(obj.get("devin_id"))
@@ -804,7 +891,11 @@ def _fold_net(record):
     body = d.get("body")
     if not isinstance(body, str) or not body:
         return
-    ts = record.get("ts")
+    # Capture stamps come from our own clock, but clamp anyway: a record
+    # written under a skewed clock and re-folded by the boot backfill would
+    # otherwise poison statusAt/prsAt/costAt/lastSeen just like a bad server
+    # timestamp.
+    ts = _clamp_future(record.get("ts"))
 
     if d.get("channel") == "ws":
         try:
@@ -907,7 +998,13 @@ def _fold_net(record):
             return
         summ = _summary_for(sid)
         summ["lastSeen"] = ts
-        for ev in _iter_truncated_array(body, '{"result":['):
+        # The ordinary fetch wrapper also sees this endpoint but clips bodies
+        # at 24KB. Only the background repair's explicitly tagged FULL body
+        # proves the transcript was backfilled end-to-end.
+        if d.get("historyRefresh") and "\u2026[+" not in body:
+            summ["historyAt"] = ts
+            summ["historyVersion"] = 1
+        for ev in _iter_stream_events(body):
             _note_message(summ, ev)
         return
 
@@ -1583,10 +1680,19 @@ def main():
     # Keep the persisted summary rather than resetting it: at current capture
     # volume the retained event logs rotate away within minutes, so a fresh
     # backfill forgets the accumulated status of every session without very
-    # recent traffic. Re-derive awaiting under current rules, then re-fold the
+    # recent traffic. Heal any future-poisoned timestamps persisted before
+    # the _clamp_future guard existed (they would win every subsequent fold
+    # forever), re-derive awaiting under current rules, then re-fold the
     # retained logs on top (idempotent, newest-timestamp-wins).
     for sid in list(STATE["summary"]):
-        _derive_awaiting(_summary_for(sid))
+        summ = _summary_for(sid)
+        # historyAt was briefly emitted for ordinary clipped /stream captures;
+        # invalidate those rollout-era values once. Verified full captures
+        # carry historyVersion=1 and remain valid across restarts.
+        if summ.get("historyVersion") != 1:
+            summ["historyAt"] = None
+        _heal_summary_timestamps(summ)
+        _derive_awaiting(summ)
     _backfill_summary()
     threading.Thread(target=_llm_loop, name="llm-enrich", daemon=True).start()
     # ThreadingHTTPServer: one daemon thread per request, so a slow request
