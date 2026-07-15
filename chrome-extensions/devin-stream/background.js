@@ -321,6 +321,143 @@ async function pollV2Sessions() {
 
 chrome.alarms.create("poll-v2sessions", { periodInMinutes: 2.5 });
 
+// ── Open-tab message-history repair ─────────────────────────────────────────
+// A v2sessions row exposes only latest_message_contents, so it cannot recover
+// intermediate turns missed while a tab had an old/unwrapped WebSocket. Rotate
+// through a few stale OPEN tabs and fetch the authoritative event history using
+// the same in-page auth headers as the v2 poll. Full bodies go through the
+// normal MAIN -> ISOLATED bridge and sink fold.
+var HISTORY_PERIOD_MIN = 2.5;
+var HISTORY_BATCH = 2;
+var HISTORY_STALE_MS = 30 * 60 * 1000;
+var SUMMARY_URL = "http://127.0.0.1:48292/summary";
+
+function historyPollFn(sessionIds) {
+  var rec = window.__dsLastV2SessionsReq;
+  var headers = (rec && rec.headers) || {};
+  if (!Object.keys(headers).length) {
+    return Promise.resolve({ ok: false, reason: "no-recorded-auth" });
+  }
+  var results = [];
+  var chain = Promise.resolve();
+  sessionIds.forEach(function (devinId) {
+    chain = chain.then(function () {
+      var url = "https://app.devin.ai/api/events/" + devinId + "/stream";
+      var started = Date.now();
+      return fetch(url, { credentials: "include", headers: headers })
+        .then(function (r) {
+          var ct = r.headers.get("content-type") || "";
+          if (!r.ok || !/json|text/i.test(ct)) {
+            results.push({ id: devinId, ok: false, status: r.status });
+            return;
+          }
+          return r.text().then(function (body) {
+            try {
+              window.postMessage({
+                __devinStream: "devin-stream-net",
+                payload: {
+                  channel: "fetch", url: url, method: "GET",
+                  status: r.status, contentType: ct,
+                  ms: Date.now() - started, body: body,
+                  historyRefresh: true,
+                },
+              }, window.location.origin);
+            } catch (e) {}
+            results.push({
+              id: devinId, ok: true, status: r.status, bytes: body.length,
+            });
+          });
+        })
+        .catch(function (e) {
+          results.push({ id: devinId, ok: false, error: String(e) });
+        });
+    });
+  });
+  return chain.then(function () {
+    return {
+      ok: results.some(function (r) { return r.ok; }),
+      results: results,
+    };
+  });
+}
+
+async function staleOpenSessionIds() {
+  var ids = await openSessionIds();
+  if (!ids.length) return [];
+  var sessions = {};
+  try {
+    var res = await fetch(SUMMARY_URL);
+    if (res.ok) sessions = (await res.json()).sessions || {};
+  } catch (e) {}
+  var now = Date.now();
+  return ids.filter(function (devinId) {
+    var sid = devinId.replace(/^devin-/, "");
+    var summ = sessions[sid];
+    if (!summ) return true;
+    // v2sessions updates lastSeen but carries only ONE latest message. Only a
+    // completed /stream fold proves missed intermediate turns were repaired.
+    var seen = parseSinkTs(summ.historyAt);
+    return !isFinite(seen) || now - seen >= HISTORY_STALE_MS;
+  });
+}
+
+async function activeOpenSessionId() {
+  try {
+    var tabs = await chrome.tabs.query({
+      url: "https://app.devin.ai/sessions/*",
+      active: true,
+      lastFocusedWindow: true,
+    });
+    var m = tabs[0] && /\/sessions\/([a-f0-9]{8,})/i.exec(tabs[0].url || "");
+    return m ? "devin-" + m[1] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function refreshOpenHistories() {
+  var stale = await staleOpenSessionIds();
+  if (!stale.length) return;
+  stale.sort();
+  var preferred = await activeOpenSessionId();
+  var store = await chrome.storage.local.get("historyCursor");
+  var cursor = store.historyCursor || 0;
+  if (cursor >= stale.length) cursor = 0;
+  var batch = stale.slice(cursor, cursor + HISTORY_BATCH);
+  if (preferred && stale.indexOf(preferred) >= 0 &&
+      batch.indexOf(preferred) < 0) {
+    if (batch.length >= HISTORY_BATCH) batch[0] = preferred;
+    else batch.unshift(preferred);
+  }
+  await chrome.storage.local.set({
+    historyCursor: (cursor + HISTORY_BATCH) % stale.length,
+  });
+
+  var tabs = await candidatePollTabs();
+  var last = null;
+  for (var i = 0; i < tabs.length && i < POLL_MAX_TABS; i++) {
+    try {
+      var out = await chrome.scripting.executeScript({
+        target: { tabId: tabs[i].id }, world: "MAIN",
+        func: historyPollFn, args: [batch],
+      });
+      var result = (out && out[0]) ? out[0].result : null;
+      last = Object.assign({ tabId: tabs[i].id, tabUrl: tabs[i].url },
+                           result || {});
+      if (result && result.ok) break;
+    } catch (e) {
+      last = { tabId: tabs[i].id, tabUrl: tabs[i].url, error: String(e) };
+    }
+  }
+  sinkEvent(Object.assign({
+    event: "history-poll", ids: batch.length, stale: stale.length,
+  }, last || { ok: false, reason: "no-tab" }));
+}
+
+chrome.alarms.create("refresh-open-histories", {
+  periodInMinutes: HISTORY_PERIOD_MIN,
+});
+
 // ── Dormant-session backfill ─────────────────────────────────────────────────
 // The active poll only refreshes the sessions with an OPEN tab, so sessions
 // whose tab was closed keep stale PR/status data in the sink forever (until
@@ -388,21 +525,45 @@ async function backfillDormantSessions() {
 
 chrome.alarms.create("backfill-v2sessions", { periodInMinutes: BACKFILL_PERIOD_MIN });
 
-chrome.alarms.onAlarm.addListener(function (alarm) {
-  if (alarm.name === "poll-v2sessions") pollV2Sessions();
-  if (alarm.name === "backfill-v2sessions") backfillDormantSessions();
+chrome.alarms.onAlarm.addListener(async function (alarm) {
+  if (alarm.name === "poll-v2sessions") await pollV2Sessions();
+  if (alarm.name === "backfill-v2sessions") await backfillDormantSessions();
+  if (alarm.name === "refresh-open-histories") await refreshOpenHistories();
 });
 
 // ── Boot ────────────────────────────────────────────────────────────────────
 
-injectIntoOpenTabs().then(function (n) {
-  sinkEvent({ event: "worker-start", bootId: BOOT_ID, injected: n });
-  // Prime the status refresh immediately rather than waiting for the first
-  // alarm ~2.5 min out.
-  pollV2Sessions();
+function ensureRecurringAlarms() {
+  // Chrome documents that alarms generally persist, but they can disappear
+  // across browser/extension restarts. Recreate them on every worker boot and
+  // explicit startup/install event; chrome.alarms.create is idempotent by name.
+  chrome.alarms.create("watch-files", { periodInMinutes: 0.5 });
+  chrome.alarms.create("poll-v2sessions", { periodInMinutes: 2.5 });
+  chrome.alarms.create("backfill-v2sessions", {
+    periodInMinutes: BACKFILL_PERIOD_MIN,
+  });
+  chrome.alarms.create("refresh-open-histories", {
+    periodInMinutes: HISTORY_PERIOD_MIN,
+  });
+}
+
+async function startWorker(reason) {
+  ensureRecurringAlarms();
+  var n = await injectIntoOpenTabs();
+  sinkEvent({ event: reason, bootId: BOOT_ID, injected: n });
+  // Prime both repair paths instead of waiting for their first alarm.
+  await pollV2Sessions();
+  await refreshOpenHistories();
+}
+
+ensureRecurringAlarms();
+startWorker("worker-start");
+
+chrome.runtime.onStartup.addListener(function () {
+  ensureRecurringAlarms();
 });
 
 chrome.runtime.onInstalled.addListener(function (details) {
   sinkEvent({ event: "installed", reason: details.reason, bootId: BOOT_ID });
-  injectIntoOpenTabs();
+  ensureRecurringAlarms();
 });

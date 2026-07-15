@@ -15,8 +15,15 @@
 // them through the live indexedDB API here yields fully-decoded objects.
 
 (function () {
-  if (window.__devinStreamContent) return;
-  window.__devinStreamContent = true;
+  // Extension reloads invalidate the old chrome.runtime binding while the
+  // isolated-world page global can survive. A permanent one-shot guard then
+  // prevents the replacement script from ever attaching. Tear down a prior
+  // version and install fresh timers/listeners against the current runtime.
+  var VERSION = "2026-07-15.1";
+  if (typeof window.__devinStreamContentCleanup === "function") {
+    try { window.__devinStreamContentCleanup(); } catch (e) {}
+  }
+  window.__devinStreamContent = VERSION;
 
   var SAMPLE_RECORDS = 3;        // records sampled per object store
   var SAMPLE_CHARS = 1500;       // truncation per sampled record (chars)
@@ -24,6 +31,7 @@
   var LS_SAMPLE_CHARS = 800;
   var DISCOVERY_PERIOD_MS = 60000;
   var NET_FLUSH_MS = 1500;
+  var NET_BATCH_CHARS = 8 * 1024 * 1024;
   var CONTEXT_PERIOD_MS = 15000; // session context heartbeat (was 5s; the
                                  // textContent scan is the expensive part)
 
@@ -71,27 +79,43 @@
 
   // ── 1. Relay MAIN-world network captures ──────────────────────────────────
   var netQueue = [];
-  window.addEventListener("message", function (ev) {
+  function onNetMessage(ev) {
     if (ev.source !== window) return;
     var d = ev.data;
     if (!d || d.__devinStream !== "devin-stream-net" || !d.payload) return;
     netQueue.push(d.payload);
     if (netQueue.length > 200) netQueue.shift();
-  });
+  }
+  window.addEventListener("message", onNetMessage);
 
   function flushNet() {
     if (!netQueue.length) return;
     var batch = netQueue.splice(0, netQueue.length);
     var sid = sessionId();
-    var events = batch.map(function (p) {
-      return { source: "devin-stream", kind: "net", sessionId: sid, url: location.href, data: p };
+    var chunks = [], current = [], chars = 0;
+    batch.forEach(function (p) {
+      var event = {
+        source: "devin-stream", kind: "net", sessionId: sid,
+        url: location.href, data: p,
+      };
+      var n = (p && typeof p.body === "string" ? p.body.length : 0) + 1000;
+      if (current.length && chars + n > NET_BATCH_CHARS) {
+        chunks.push(current);
+        current = [];
+        chars = 0;
+      }
+      current.push(event);
+      chars += n;
     });
-    try {
-      chrome.runtime.sendMessage({ type: "devin-stream-batch", events: events },
-        function () { void chrome.runtime.lastError; });
-    } catch (e) {}
+    if (current.length) chunks.push(current);
+    chunks.forEach(function (events) {
+      try {
+        chrome.runtime.sendMessage({ type: "devin-stream-batch", events: events },
+          function () { void chrome.runtime.lastError; });
+      } catch (e) {}
+    });
   }
-  setInterval(flushNet, NET_FLUSH_MS);
+  var netTimer = setInterval(flushNet, NET_FLUSH_MS);
 
   // ── 2. IndexedDB + localStorage discovery ─────────────────────────────────
   function openDb(name) {
@@ -217,13 +241,27 @@
     sessionContext();
   }
 
+  function onDomReady() {
+    boot();
+  }
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
+    document.addEventListener("DOMContentLoaded", onDomReady);
   } else {
     boot();
   }
-  setInterval(runDiscovery, DISCOVERY_PERIOD_MS);
-  setInterval(sessionContext, CONTEXT_PERIOD_MS);
+  var discoveryTimer = setInterval(runDiscovery, DISCOVERY_PERIOD_MS);
+  var contextTimer = setInterval(sessionContext, CONTEXT_PERIOD_MS);
 
-  window.__devinStreamContentCleanup = function () {};
+  var cleanup = function () {
+    clearInterval(netTimer);
+    clearInterval(discoveryTimer);
+    clearInterval(contextTimer);
+    window.removeEventListener("message", onNetMessage);
+    document.removeEventListener("DOMContentLoaded", onDomReady);
+    if (window.__devinStreamContentCleanup === cleanup) {
+      delete window.__devinStreamContentCleanup;
+      delete window.__devinStreamContent;
+    }
+  };
+  window.__devinStreamContentCleanup = cleanup;
 })();

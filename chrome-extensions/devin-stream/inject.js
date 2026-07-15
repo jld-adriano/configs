@@ -10,10 +10,33 @@
 // This script only observes -- it never blocks, rewrites, or delays traffic.
 
 (function () {
-  if (window.__devinStreamNet) return; // guard against double injection
-  window.__devinStreamNet = true;
-
+  // A permanent boolean guard wedges long-lived pages after an unpacked
+  // extension reload: the page global survives, so a newer interceptor can
+  // never replace the old wrappers. Keep an explicit versioned installation
+  // with a reversible cleanup instead. Existing sockets cannot be adopted
+  // retroactively; background.js's history refresh repairs that gap.
+  var VERSION = "2026-07-15.1";
   var TAG = "devin-stream-net";
+  var previous = window.__devinStreamNetState;
+  if (previous && previous.version === VERSION) {
+    try {
+      window.postMessage({
+        __devinStream: TAG,
+        payload: {
+          channel: "meta", event: "interceptor-already-current",
+          version: VERSION, href: window.location.href,
+        },
+      }, window.location.origin);
+    } catch (e) {}
+    return;
+  }
+  if (previous && typeof previous.cleanup === "function") {
+    try { previous.cleanup(); } catch (e) {}
+  }
+  var state = { version: VERSION };
+  window.__devinStreamNetState = state;
+  window.__devinStreamNet = VERSION; // compatibility/diagnostics
+
   var MAX_BODY = 24000; // hard truncation per captured body (chars)
   var MAX_WS_FRAME = 24000;
   var MAX_REQ_BODY = 3000; // truncation for captured OUTGOING request bodies
@@ -143,7 +166,7 @@
   // ── fetch ──────────────────────────────────────────────────────────────
   var realFetch = window.fetch;
   if (realFetch) {
-    window.fetch = function (input, init) {
+    var wrappedFetch = function (input, init) {
       var url = typeof input === "string" ? input : (input && input.url) || "";
       var method = (init && init.method) || (input && input.method) || "GET";
       recordV2(url, method, input, init);
@@ -171,6 +194,9 @@
       }
       return p;
     };
+    state.realFetch = realFetch;
+    state.wrappedFetch = wrappedFetch;
+    window.fetch = wrappedFetch;
   }
 
   // ── XMLHttpRequest ───────────────────────────────────────────────────────
@@ -178,12 +204,12 @@
   if (RealXHR) {
     var open = RealXHR.prototype.open;
     var send = RealXHR.prototype.send;
-    RealXHR.prototype.open = function (method, url) {
+    var wrappedOpen = function (method, url) {
       this.__ds = { method: method, url: url, started: Date.now() };
       recordV2(url, method);
       return open.apply(this, arguments);
     };
-    RealXHR.prototype.send = function (data) {
+    var wrappedSend = function (data) {
       var self = this;
       if (self.__ds && typeof data === "string") {
         captureRequestBody(self.__ds.url, self.__ds.method, null, { body: data });
@@ -204,6 +230,13 @@
       }
       return send.apply(this, arguments);
     };
+    state.realXHR = RealXHR;
+    state.xhrOpen = open;
+    state.xhrSend = send;
+    state.wrappedXhrOpen = wrappedOpen;
+    state.wrappedXhrSend = wrappedSend;
+    RealXHR.prototype.open = wrappedOpen;
+    RealXHR.prototype.send = wrappedSend;
   }
 
   // ── WebSocket ─────────────────────────────────────────────────────────────
@@ -240,6 +273,8 @@
     WrappedWS.OPEN = RealWS.OPEN;
     WrappedWS.CLOSING = RealWS.CLOSING;
     WrappedWS.CLOSED = RealWS.CLOSED;
+    state.realWS = RealWS;
+    state.wrappedWS = WrappedWS;
     window.WebSocket = WrappedWS;
   }
 
@@ -258,8 +293,39 @@
       return es;
     };
     WrappedES.prototype = RealES.prototype;
+    state.realES = RealES;
+    state.wrappedES = WrappedES;
     window.EventSource = WrappedES;
   }
 
-  post({ channel: "meta", event: "interceptor-installed", href: window.location.href });
+  state.cleanup = function () {
+    try {
+      if (state.wrappedFetch && window.fetch === state.wrappedFetch) {
+        window.fetch = state.realFetch;
+      }
+      if (state.realXHR) {
+        if (state.realXHR.prototype.open === state.wrappedXhrOpen) {
+          state.realXHR.prototype.open = state.xhrOpen;
+        }
+        if (state.realXHR.prototype.send === state.wrappedXhrSend) {
+          state.realXHR.prototype.send = state.xhrSend;
+        }
+      }
+      if (state.wrappedWS && window.WebSocket === state.wrappedWS) {
+        window.WebSocket = state.realWS;
+      }
+      if (state.wrappedES && window.EventSource === state.wrappedES) {
+        window.EventSource = state.realES;
+      }
+      if (window.__devinStreamNetState === state) {
+        delete window.__devinStreamNetState;
+        delete window.__devinStreamNet;
+      }
+    } catch (e) {}
+  };
+
+  post({
+    channel: "meta", event: "interceptor-installed",
+    version: VERSION, href: window.location.href,
+  });
 })();
