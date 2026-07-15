@@ -26,7 +26,7 @@ events.jsonl on first start):
 
     summary[sessionId] = {title, rawTitle, status, statusAt,
                           statusEnum, statusMessage,
-                          statusEnumAt, awaiting,
+                          statusEnumAt, awaiting, awaitingSince,
                           costUsd, acuUsed, costAt,
                           prs: [{number,title,url,state,merged,
                           draft,observedAt}], prsAt,
@@ -58,9 +58,18 @@ flags the window-colors content script used to compute from page text:
     enum:    "blocked" | "working" | "finished"      (status_update events /
                                                       latest_status_contents)
 
-    awaiting = (enum == "blocked")          # "Waiting for your response"
+    awaiting = (enum == "blocked"           # "Waiting for your response",
+                and blocked has persisted   # once the AWAIT_DWELL_S dwell
+                for AWAIT_DWELL_S)          # passes: Devin flaps working<->
+                                            # blocked every few tens of
+                                            # seconds DURING active work, so
+                                            # a short-lived blocked must not
+                                            # flash the awaiting bar
                or (status == "suspended"    # asleep ("Devin went to sleep",
-                                            # incl. crashed/user_inactivity)
+                                            # incl. crashed/user_inactivity;
+                                            # a finished status_update with a
+                                            # sleep message counts right away
+                                            # -- see _SLEEP_FINISHED_MSGS)
                    and no NEWER "working" status_update)  # a wake emits
                                             # "working" over the WS minutes
                                             # before a poll refreshes the
@@ -332,7 +341,7 @@ def _summary_for(sid):
         "title": None, "rawTitle": None, "status": None, "statusAt": None,
         "prs": [], "prsAt": None,
         "statusEnum": None, "statusEnumAt": None, "statusMessage": None,
-        "awaiting": False,
+        "awaiting": False, "awaitingSince": None,
         "lastHumanMessage": None, "lastHumanMessageAt": None,
         "lastAgentMessage": None, "lastAgentMessageAt": None,
         "recentMessages": [],
@@ -349,6 +358,7 @@ def _summary_for(sid):
               "decidedTitle", "symbol", "symbolShortcode", "decidedAt"):
         summ.setdefault(k, None)
     summ.setdefault("awaiting", False)
+    summ.setdefault("awaitingSince", None)
     return summ
 
 
@@ -493,6 +503,31 @@ def _note_immediate_human(record, text, url):
                          "timestamp": ts}, approx=True)
 
 
+# Dwell before a "blocked" enum turns awaiting on. Devin's own status stream
+# ALTERNATES working <-> blocked on a tens-of-seconds scale during active
+# multi-step work (observed live: working 20:15:49 -> blocked 20:16:10 ->
+# working 20:17:40 -> blocked 20:18:02 for one session; the sink faithfully
+# mirrored every transition and the banner's orange awaiting bar flapped
+# with it). A blocked state that Devin exits by ITSELF within this window
+# never needed the user, so it must not surface; a genuinely blocked
+# session persists far beyond it and turns the bar on (a little later --
+# stability beats instant edge detection here). The anchor is the blocked
+# event's OWN timestamp, so at boot/backfill a long-blocked session is
+# awaiting immediately, not dwell-delayed anew.
+AWAIT_DWELL_S = 120
+
+# statusMessages that mark a "finished" enum as SLEEP rather than completion
+# (observed pairings across ~1200 summarized sessions: "Session suspended" /
+# "Devin crashed" always ride status "suspended"; "Session terminated" rides
+# status "exit"). Recognizing sleep from the status_update itself avoids a
+# transient awaiting=false dip between the finished event (which clears
+# "blocked") and the next lifecycle poll observing status "suspended" -- a
+# 30-60s window in which the summary read finished+running (observed live as
+# a one-heartbeat orange-bar blink on every suspension). Unknown/renamed
+# messages just fall through to the lifecycle-status path.
+_SLEEP_FINISHED_MSGS = ("session suspended", "devin crashed")
+
+
 def _derive_awaiting(summ):
     """awaiting = needs the user: blocked on a response, or asleep.
 
@@ -505,10 +540,17 @@ def _derive_awaiting(summ):
     seconds; lifecycle status from v2sessions polls minutes apart), so the
     NEWEST observation governs rather than a plain OR of both:
 
-    - enum "blocked" -> awaiting, until a newer status_update replaces the
-      enum (_note_status is newest-timestamp-wins, so a later "working"
-      clears it by itself).
-    - status "suspended" -> asleep -> awaiting, UNLESS a status_update
+    - enum "blocked" -> awaiting, once blocked has PERSISTED for
+      AWAIT_DWELL_S (see above -- Devin flaps working<->blocked while
+      actively working). awaitingSince pins the start of the current
+      blocked episode: repeated blocked re-confirmations (which advance
+      statusEnumAt) don't restart the dwell, and any newer non-blocked
+      status clears it so the next episode starts a fresh dwell.
+      Time-based, so it needs re-evaluation as wall-clock passes: every
+      fold re-derives, and _refresh_awaiting re-derives on every /summary
+      read, so the flip lands within the consumer's own poll cadence.
+    - status "suspended" -> asleep -> awaiting IMMEDIATELY (suspension is
+      a deliberate lifecycle change, not flappy), UNLESS a status_update
       NEWER than the suspension observation (statusAt) says the session is
       actively working: waking a sleeping session emits the "working"
       update over the WS minutes before the next poll refreshes the
@@ -522,14 +564,44 @@ def _derive_awaiting(summ):
       pre-sleep "working" enum can't wrongly clear it).
     """
     if summ.get("statusEnum") == "blocked":
-        summ["awaiting"] = True
+        since = summ.get("awaitingSince") or summ.get("statusEnumAt")
+        summ["awaitingSince"] = since
+        # No usable timestamp (untimestamped enum fill): _epoch is 0 and the
+        # dwell reads as long elapsed -> awaiting, matching old behavior.
+        summ["awaiting"] = time.time() - _epoch(since) >= AWAIT_DWELL_S
         return
+    summ["awaitingSince"] = None
     suspended = summ.get("status") == "suspended"
     if suspended and summ.get("statusEnum") == "working" \
             and _epoch(summ.get("statusEnumAt")) \
             > _epoch(summ.get("statusAt") or summ.get("lastSeen")):
         suspended = False
+    # Sleep announced by the status_update itself (finished + a sleep
+    # message; see _SLEEP_FINISHED_MSGS): counts as suspended right away,
+    # closing the 30-60s awaiting dip between this event and the poll that
+    # updates the lifecycle status. The lifecycle poll still has the last
+    # word: if a poll clearly AFTER the sleep event keeps reporting a
+    # non-suspended status, trust it (contradiction; shouldn't happen).
+    if not suspended and summ.get("statusEnum") == "finished" \
+            and (summ.get("statusMessage") or "").strip().casefold() \
+            in _SLEEP_FINISHED_MSGS \
+            and _epoch(summ.get("statusAt")) \
+            - _epoch(summ.get("statusEnumAt")) < 300:
+        suspended = True
     summ["awaiting"] = suspended
+
+
+def _refresh_awaiting():
+    """Re-derive awaiting for every session (callers hold STATE_LOCK).
+
+    The blocked->awaiting dwell is wall-clock-based, so a session with no
+    new traffic must still flip once the dwell elapses. Called from the GET
+    handlers before serializing: consumers poll /summary every few seconds,
+    which makes THEIR read the re-evaluation tick. Pure in-memory dict work
+    over ~1-2k sessions -- microseconds, fine under the lock.
+    """
+    for summ in STATE["summary"].values():
+        _derive_awaiting(summ)
 
 
 def _note_lifecycle_status(summ, status, ts):
@@ -1467,10 +1539,12 @@ class Handler(BaseHTTPRequestHandler):
         # it, so a slow client can never stall the other threads.
         if self.path.startswith("/state"):
             with STATE_LOCK:
+                _refresh_awaiting()  # dwell is wall-clock-based; see its doc
                 data = json.dumps(STATE, default=str).encode()
             return self._respond_raw(200, data)
         if self.path.startswith("/summary"):
             with STATE_LOCK:
+                _refresh_awaiting()
                 data = json.dumps({
                     "sessions": STATE["summary"],
                     "updatedAt": STATE["updatedAt"],

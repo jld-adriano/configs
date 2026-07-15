@@ -1098,7 +1098,12 @@
   //      knew their state; (2) is what lets the active poll actually move tabs
   //      onto awaitSource "sink".
   const AWAIT_SINK_FRESH_MS = 4 * 60 * 1000;
-  const AWAIT_SINK_OBSERVED_MS = 6 * 60 * 1000; // > poll period, with margin
+  // Generous multiple of the ~2.5min poll period: sink authority must not
+  // flip to the text backstop (and back) over a transient poll hiccup or a
+  // sink restart -- each authority handoff is a potential awaiting flip
+  // (observed flapping). 30min of NO observation at all means capture is
+  // genuinely broken, which is what the text backstop is for.
+  const AWAIT_SINK_OBSERVED_MS = 30 * 60 * 1000;
 
   // Parse the sink's timestamps (ISO with a numeric offset like -0700; some
   // engines want the offset colon, so insert it before Date.parse).
